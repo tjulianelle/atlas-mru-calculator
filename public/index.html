@@ -438,14 +438,14 @@
       <div>
         <label>Renewal Fee Type</label>
         <select id="renewal_type">
-          <option value="flat">Flat Dollar Amount</option>
           <option value="pct_rent">% of Monthly Rent</option>
+          <option value="flat">Flat Dollar Amount</option>
           <option value="none">None</option>
         </select>
       </div>
       <div>
-        <label id="renewal_amt_label">Renewal Fee ($)</label>
-        <input type="number" id="renewal_amount" value="250" min="0" step="10" />
+        <label id="renewal_amt_label">Renewal Fee (%)</label>
+        <input type="number" id="renewal_amount" value="20" min="0" step="1" />
       </div>
     </div>
 
@@ -875,14 +875,14 @@ function findBreakeven() {
 }
 
 const PRESETS = {
-  co_sfr_typical: {asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  co_mf_typical: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  co_mf_new: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  all_other_states_sfr: {asset_type:"Single-Family", state:"TX", doors:1, rent:2200, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
-  all_other_states_mf: {asset_type:"Multi-Family", state:"TX", doors:6, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  co_sfr_typical: {asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_typical: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_new: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  all_other_states_sfr: {asset_type:"Single-Family", state:"TX", doors:1, rent:2200, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  all_other_states_mf: {asset_type:"Multi-Family", state:"TX", doors:6, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
 };
 
 function loadPreset(key) {
