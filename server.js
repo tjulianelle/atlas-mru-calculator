@@ -18,7 +18,13 @@ if (!password) {
   process.exit(1);
 }
 
-// Apply basic auth to all routes
+// Public health check — no auth — used by Railway's healthcheck probe.
+// MUST come BEFORE the basicAuth middleware so Railway can reach it.
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// Apply basic auth to all subsequent routes
 app.use(basicAuth({
   users: { [username]: password },
   challenge: true,
@@ -26,15 +32,8 @@ app.use(basicAuth({
   unauthorizedResponse: 'Authentication required to access the Atlas MRU v2 Calculator.',
 }));
 
-// Serve the static calculator
+// Serve the static calculator (auth-protected)
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Health check (no auth needed for Railway probes)
-// Note: this comes AFTER basicAuth middleware, so it would also be protected.
-// If Railway needs an unauthenticated health endpoint, move this above app.use(basicAuth).
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
-});
 
 app.listen(PORT, () => {
   console.log(`Atlas MRU v2 Calculator running on port ${PORT}`);
