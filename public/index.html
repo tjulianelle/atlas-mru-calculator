@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Atlas MRU v2 Calculator</title>
+<title>Atlas MRU Calculator</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
@@ -200,14 +200,132 @@
     .kpi-grid { grid-template-columns: repeat(2, 1fr); }
     .breakdown { grid-template-columns: 1fr; }
   }
+
+  /* Saved scenarios */
+  .scenarios-list { display: flex; flex-direction: column; gap: 10px; }
+  .scenarios-empty { color: #888; font-size: 13px; padding: 12px 0; }
+  .scenario-row {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--atlas-mid);
+    border-radius: 6px;
+    overflow: hidden;
+    transition: box-shadow 0.15s;
+  }
+  .scenario-row:hover { box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
+  .scenario-main {
+    flex: 1;
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  .scenario-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--atlas-navy);
+    margin-bottom: 3px;
+  }
+  .scenario-meta { font-size: 12px; color: #666; margin-bottom: 6px; }
+  .scenario-stats { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .scenario-pill {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: var(--atlas-light);
+    color: var(--atlas-dark);
+    font-weight: 600;
+  }
+  .scenario-pill.good { background: #E5F2EC; color: #1F5736; }
+  .scenario-pill.warn { background: #FBF1E2; color: #84541C; }
+  .scenario-pill.bad { background: #F7E5E5; color: #802929; }
+  .scenario-date { font-size: 11px; color: #999; margin-left: auto; }
+  .scenario-delete {
+    width: 36px;
+    background: transparent;
+    color: #999;
+    border: none;
+    border-left: 1px solid var(--atlas-mid);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    margin: 0;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .scenario-delete:hover { background: #F7E5E5; color: var(--bad); }
+
+  /* Print-only header (visible only when printing) */
+  .print-only { display: none; }
+  #print_header.print-only { display: none; }
+
+  /* PRINT STYLESHEET — clean, presentable, single-page where possible */
+  @media print {
+    @page { size: letter; margin: 0.5in; }
+    body { background: white; color: black; }
+    .no-print { display: none !important; }
+    .print-only { display: block !important; }
+    #print_header {
+      display: block !important;
+      padding: 0 0 16px 0;
+      margin-bottom: 20px;
+      border-bottom: 3px solid var(--atlas-accent);
+    }
+    .print-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--atlas-navy);
+      margin-bottom: 4px;
+    }
+    .print-subtitle {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    .print-meta {
+      font-size: 12px;
+      color: #444;
+      font-style: italic;
+    }
+    .container {
+      display: block;
+      max-width: 100%;
+      padding: 0;
+      gap: 0;
+    }
+    .card {
+      box-shadow: none;
+      padding: 8px 0;
+      page-break-inside: avoid;
+      margin-bottom: 8px;
+    }
+    .card h2 {
+      font-size: 13px;
+      border: none;
+      padding-bottom: 4px;
+      margin-bottom: 8px;
+    }
+    .verdict { padding: 10px 14px; }
+    .verdict-title { font-size: 13px; }
+    .verdict-detail { font-size: 11px; }
+    .kpi-grid { gap: 8px; margin-bottom: 12px; }
+    .kpi { padding: 8px; }
+    .kpi-label { font-size: 9px; }
+    .kpi-value { font-size: 16px; }
+    .kpi-sub { font-size: 9px; }
+    table { font-size: 11px; }
+    table th, table td { padding: 4px 6px; }
+    .chart-wrap { height: 180px; }
+    footer { display: none; }
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Atlas MRU v2 Calculator</h1>
-  <div class="sub">3rd Party Property Management — Atlas-Keep Methodology — TTM April 2026</div>
+<header class="no-print">
+  <h1>Atlas MRU Calculator</h1>
 </header>
+
+<!-- Print-only header populated by exportPDF() -->
+<div id="print_header" class="print-only"></div>
 
 <div class="container">
 
@@ -215,13 +333,14 @@
   <div class="card">
     <h2>Property Inputs</h2>
 
-    <label>Asset Type</label>
-    <select id="asset_type">
-      <option value="Single-Family">Single-Family</option>
-      <option value="Multi-Family">Multi-Family</option>
-    </select>
-
+    <h3>Property Address</h3>
+    <label>Street</label>
+    <input type="text" id="addr_street" placeholder="123 Main Street" />
     <div class="row">
+      <div>
+        <label>City</label>
+        <input type="text" id="addr_city" placeholder="Denver" />
+      </div>
       <div>
         <label>State</label>
         <select id="state">
@@ -234,11 +353,16 @@
           <option value="other">Other</option>
         </select>
       </div>
-      <div>
-        <label>Doors</label>
-        <input type="number" id="doors" value="1" min="1" />
-      </div>
     </div>
+
+    <label>Asset Type</label>
+    <select id="asset_type">
+      <option value="Single-Family">Single-Family</option>
+      <option value="Multi-Family">Multi-Family</option>
+    </select>
+
+    <label>Doors</label>
+    <input type="number" id="doors" value="1" min="1" />
 
     <label>Rent per Door (monthly)</label>
     <input type="number" id="rent" value="2500" min="100" step="50" />
@@ -287,6 +411,8 @@
 
     <button onclick="calculate()">Calculate</button>
     <button class="secondary" onclick="findBreakeven()">Solve Breakeven Fee</button>
+    <button class="secondary" onclick="saveCurrentScenario()">Save Scenario</button>
+    <button class="secondary" onclick="exportPDF()">Export PDF</button>
 
     <h3>Quick Presets</h3>
     <div class="presets">
@@ -296,6 +422,8 @@
       <button onclick="loadPreset('az_sfr')">AZ SFR</button>
       <button onclick="loadPreset('co_mf_low_rent')">Low-Rent CO MF</button>
       <button onclick="loadPreset('high_end_sfr')">High-End CO SFR</button>
+      <button onclick="loadPreset('all_other_states_sfr')">All Other States SFR</button>
+      <button onclick="loadPreset('all_other_states_mf')">All Other States MF</button>
     </div>
 
     <details>
@@ -317,7 +445,7 @@
 
       <div class="kpi-grid">
         <div class="kpi">
-          <div class="kpi-label">Atlas Wallet</div>
+          <div class="kpi-label">Atlas MRU</div>
           <div class="kpi-value" id="kpi_wallet">$0</div>
           <div class="kpi-sub">per door / month</div>
         </div>
@@ -355,7 +483,7 @@
           <h3 style="margin-top: 24px;">Lifetime Value</h3>
           <table>
             <tbody>
-              <tr><td>10-yr contribution per door (retention-adjusted)</td><td class="right" id="lifetime">—</td></tr>
+              <tr><td>5-yr contribution per door (retention-adjusted)</td><td class="right" id="lifetime">—</td></tr>
             </tbody>
           </table>
         </div>
@@ -366,11 +494,16 @@
       <h2>Contribution vs Management Fee</h2>
       <div class="chart-wrap"><canvas id="feeChart"></canvas></div>
     </div>
+
+    <div class="card no-print" style="margin-top: 24px;">
+      <h2>Saved Scenarios</h2>
+      <div id="scenarios_list" class="scenarios-list"></div>
+    </div>
   </div>
 </div>
 
-<footer>
-  Atlas Real Estate · MRU v2 Calculator · Built April 2026 · Data refreshes from Snowflake quarterly
+<footer class="no-print">
+  Atlas Real Estate · MRU Calculator · Data refreshes from Snowflake quarterly
 </footer>
 
 <script>
@@ -456,12 +589,8 @@ const RETENTION_HAZARD = {
   "Single-Family|3": 0.07, "Single-Family|4": 0.06, "Single-Family|5": 0.04,
 };
 
-const COST_PLACEHOLDER = {
-  "Single-Family|1_door":  {ops:110, overhead:60, total:170},
-  "Multi-Family|2_to_4":   {ops:95,  overhead:50, total:145},
-  "Multi-Family|5_to_10":  {ops:75,  overhead:40, total:115},
-  "Multi-Family|11_plus":  {ops:60,  overhead:35, total:95},
-};
+// Flat cost-to-serve assumption: $150 per door per month, fully loaded
+const COST_FLAT = 150;
 
 // ============================================================
 // HELPERS
@@ -565,17 +694,14 @@ function predictRevenue(input) {
 }
 
 function predictCost(input) {
-  const band = doorsBand(input.doors);
-  const c = COST_PLACEHOLDER[input.asset_type + "|" + band];
-  if (c) return c;
-  // Fallback: nearest match
-  return COST_PLACEHOLDER["Multi-Family|5_to_10"];
+  // Flat $150 per door per month, fully loaded
+  return { ops: COST_FLAT, overhead: 0, total: COST_FLAT };
 }
 
 function lifetimeContribution(monthly, asset_type, startTenureMo) {
   let total = 0;
   let survival = 1.0;
-  for (let yr = 0; yr < 10; yr++) {
+  for (let yr = 0; yr < 5; yr++) {
     const effYr = Math.min(Math.floor(startTenureMo / 12) + yr, 5);
     const hazard = RETENTION_HAZARD[asset_type + "|" + effYr] || 0.05;
     survival *= (1 - hazard);
@@ -600,6 +726,8 @@ function solveBreakeven(input, target = 0) {
 // ============================================================
 function readInputs() {
   return {
+    addr_street: document.getElementById("addr_street").value || "",
+    addr_city: document.getElementById("addr_city").value || "",
     asset_type: document.getElementById("asset_type").value,
     state: document.getElementById("state").value,
     doors: parseInt(document.getElementById("doors").value) || 1,
@@ -692,14 +820,12 @@ function calculate() {
   revBody.innerHTML = revRows
     .filter(r => r[1] > 0.005)
     .map(r => `<tr><td>${r[0]}</td><td class="right">${fmtMoney(r[1])}</td></tr>`)
-    .join("") + `<tr class="total"><td>Total Atlas Wallet</td><td class="right">${fmtMoney(rev.atlas_wallet)}</td></tr>`;
+    .join("") + `<tr class="total"><td>Total Atlas MRU</td><td class="right">${fmtMoney(rev.atlas_wallet)}</td></tr>`;
 
-  // Cost table
+  // Cost table — flat $150 per door per month, fully loaded
   const costBody = document.querySelector("#cost_table tbody");
   costBody.innerHTML = `
-    <tr><td>Operating cost</td><td class="right">${fmtMoney(cost.ops)}</td></tr>
-    <tr><td>Overhead allocation</td><td class="right">${fmtMoney(cost.overhead)}</td></tr>
-    <tr class="total"><td>Total Cost-to-Serve</td><td class="right">${fmtMoney(cost.total)}</td></tr>
+    <tr class="total"><td>Cost-to-Serve (flat assumption)</td><td class="right">${fmtMoney(cost.total)}</td></tr>
   `;
 
   // Chart: contribution as a function of mgmt fee
@@ -780,6 +906,8 @@ const PRESETS = {
   az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
   co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
   high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  all_other_states_sfr: {asset_type:"Single-Family", state:"other", doors:1, rent:2200, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  all_other_states_mf: {asset_type:"Multi-Family", state:"other", doors:6, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
 };
 
 function loadPreset(key) {
@@ -798,16 +926,162 @@ function loadPreset(key) {
   calculate();
 }
 
+// =====================================================================
+// SAVED SCENARIOS
+// =====================================================================
+const SCENARIOS_KEY = "atlas_mru_scenarios";
+
+function loadScenarios() {
+  try {
+    return JSON.parse(localStorage.getItem(SCENARIOS_KEY) || "[]");
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveScenariosToStorage(scenarios) {
+  localStorage.setItem(SCENARIOS_KEY, JSON.stringify(scenarios));
+}
+
+function saveCurrentScenario() {
+  const input = readInputs();
+  const rev = predictRevenue(input);
+  const cost = predictCost(input);
+  const contribution = rev.atlas_wallet - cost.total;
+  const breakeven = solveBreakeven(input);
+
+  // Default name from address; fallback to a property summary
+  const defaultName = [input.addr_street, input.addr_city, input.state]
+    .filter(Boolean).join(", ") ||
+    `${input.asset_type} ${input.state} $${input.rent}/door`;
+  const name = prompt("Save scenario as:", defaultName);
+  if (!name) return;
+
+  const scenario = {
+    id: Date.now().toString(),
+    name,
+    saved_at: new Date().toISOString(),
+    inputs: input,
+    results: {
+      atlas_mru: rev.atlas_wallet,
+      cost: cost.total,
+      contribution,
+      breakeven,
+    },
+  };
+
+  const scenarios = loadScenarios();
+  scenarios.unshift(scenario);
+  saveScenariosToStorage(scenarios);
+  renderSavedScenarios();
+}
+
+function loadScenarioById(id) {
+  const scenarios = loadScenarios();
+  const s = scenarios.find(x => x.id === id);
+  if (!s) return;
+  const i = s.inputs;
+  document.getElementById("addr_street").value = i.addr_street || "";
+  document.getElementById("addr_city").value = i.addr_city || "";
+  document.getElementById("asset_type").value = i.asset_type;
+  document.getElementById("state").value = i.state;
+  document.getElementById("doors").value = i.doors;
+  document.getElementById("rent").value = i.rent;
+  document.getElementById("mgmt_fee").value = (i.mgmt_fee * 100).toFixed(2);
+  document.getElementById("tenure").value = i.tenure;
+  document.getElementById("leasing_type").value = i.leasing_type;
+  document.getElementById("leasing_amount").value = i.leasing_amount;
+  document.getElementById("renewal_type").value = i.renewal_type;
+  document.getElementById("renewal_amount").value = i.renewal_amount;
+  syncFeeLabels();
+  calculate();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function deleteScenarioById(id) {
+  if (!confirm("Delete this saved scenario?")) return;
+  const scenarios = loadScenarios().filter(x => x.id !== id);
+  saveScenariosToStorage(scenarios);
+  renderSavedScenarios();
+}
+
+function renderSavedScenarios() {
+  const list = document.getElementById("scenarios_list");
+  if (!list) return;
+  const scenarios = loadScenarios();
+  if (scenarios.length === 0) {
+    list.innerHTML = '<div class="scenarios-empty">No saved scenarios yet. Run a calculation, then click <strong>Save Scenario</strong>.</div>';
+    return;
+  }
+  list.innerHTML = scenarios.map(s => {
+    const r = s.results;
+    const verdict = r.contribution >= 50 ? "good" : r.contribution >= 0 ? "warn" : "bad";
+    const date = new Date(s.saved_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return `
+      <div class="scenario-row">
+        <div class="scenario-main" onclick="loadScenarioById('${s.id}')">
+          <div class="scenario-name">${escapeHtml(s.name)}</div>
+          <div class="scenario-meta">
+            ${s.inputs.asset_type} · ${s.inputs.state} · ${s.inputs.doors}d · $${s.inputs.rent}/door · ${(s.inputs.mgmt_fee*100).toFixed(1)}% fee
+          </div>
+          <div class="scenario-stats">
+            <span class="scenario-pill ${verdict}">${fmtMoneyWhole(r.contribution)}/door/mo</span>
+            <span class="scenario-pill">MRU ${fmtMoneyWhole(r.atlas_mru)}</span>
+            <span class="scenario-pill">BE ${r.breakeven !== null ? (r.breakeven*100).toFixed(2)+"%" : "—"}</span>
+            <span class="scenario-date">${date}</span>
+          </div>
+        </div>
+        <button class="scenario-delete" onclick="deleteScenarioById('${s.id}')" title="Delete">×</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// =====================================================================
+// PDF EXPORT — uses window.print() with a print stylesheet
+// =====================================================================
+function exportPDF() {
+  // Set print title from address
+  const street = document.getElementById("addr_street").value || "";
+  const city = document.getElementById("addr_city").value || "";
+  const state = document.getElementById("state").value || "";
+  const titleParts = [street, city, state].filter(Boolean);
+  document.title = titleParts.length > 0
+    ? `Atlas MRU - ${titleParts.join(", ")}`
+    : "Atlas MRU Calculator";
+
+  // Populate the print-only header with the current property details
+  const printHeader = document.getElementById("print_header");
+  if (printHeader) {
+    const addr = titleParts.length > 0 ? titleParts.join(", ") : "Atlas MRU Estimate";
+    const meta = `${document.getElementById("asset_type").value} · ${document.getElementById("doors").value} door(s) · $${document.getElementById("rent").value}/door/mo · ${document.getElementById("mgmt_fee").value}% management fee · ${document.getElementById("tenure").value} months tenure`;
+    printHeader.innerHTML = `
+      <div class="print-title">${escapeHtml(addr)}</div>
+      <div class="print-subtitle">Atlas MRU Estimate &middot; ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</div>
+      <div class="print-meta">${escapeHtml(meta)}</div>
+    `;
+  }
+
+  window.print();
+}
+
 // Auto-calc on input change
-["asset_type","state","doors","rent","mgmt_fee","tenure",
+["addr_street","addr_city","asset_type","state","doors","rent","mgmt_fee","tenure",
  "leasing_type","leasing_amount","renewal_type","renewal_amount"].forEach(id => {
-  document.getElementById(id).addEventListener("change", () => { syncFeeLabels(); calculate(); });
-  document.getElementById(id).addEventListener("input", () => { syncFeeLabels(); calculate(); });
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener("change", () => { syncFeeLabels(); calculate(); });
+  el.addEventListener("input", () => { syncFeeLabels(); calculate(); });
 });
 
 // Initial render
 syncFeeLabels();
 calculate();
+renderSavedScenarios();
 </script>
 
 </body>
