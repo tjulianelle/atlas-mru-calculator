@@ -414,9 +414,12 @@
         <input type="number" id="mgmt_fee" value="8.0" min="0" max="20" step="0.1" />
       </div>
       <div>
-        <label>Tenure (months)</label>
-        <input type="number" id="tenure" value="24" min="0" />
+        <label>Expected Hold (years)</label>
+        <input type="number" id="hold_period" value="5" min="1" max="20" step="1" />
       </div>
+    </div>
+    <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+      Atlas MRU is the survival-weighted average across the hold period. Year 1 revenue is lower because of the onboarding ramp; longer holds dilute that drag.
     </div>
 
     <h3>Leasing &amp; Renewal Terms</h3>
@@ -525,7 +528,7 @@
           <h3 style="margin-top: 24px;">Lifetime Value</h3>
           <table>
             <tbody>
-              <tr><td>5-yr contribution per door (retention-adjusted)</td><td class="right" id="lifetime">—</td></tr>
+              <tr><td>Expected lifetime contribution per door (retention-adjusted)</td><td class="right" id="lifetime">—</td></tr>
             </tbody>
           </table>
         </div>
@@ -676,15 +679,49 @@ function computeRenewalFee(rent, type, amount) {
   return 0;
 }
 
-function predictRevenue(input) {
-  const {asset_type, state, doors, rent, mgmt_fee, tenure,
-         leasing_type, leasing_amount, renewal_type, renewal_amount} = input;
-  const tBand = tenureBand(tenure);
-  const ramp = TENURE_RAMP[asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+// Walk year by year through the hold period, applying the ramp factor for
+// each year and the retention hazard. Returns survival-weighted "effective"
+// ramp factors plus the expected number of years managed (sum of survival
+// probabilities). Used by predictRevenue and lifetimeContribution.
+function computeHoldEconomics(asset_type, hold_period_years) {
+  const horizon = Math.max(1, Math.round(hold_period_years || 5));
+  let cumSurvival = 1.0;
+  let weightedMgmt = 0, weightedTenant = 0, totalSurvival = 0;
+  const yearly = [];
+  for (let y = 0; y < horizon; y++) {
+    // Use mid-year tenure (months 6, 18, 30, ...) to pick the band
+    const midMonths = y * 12 + 6;
+    const tBand = tenureBand(midMonths);
+    const ramp = TENURE_RAMP[asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+    const hazardYear = Math.min(y, 5);
+    const hazard = RETENTION_HAZARD[asset_type + "|" + hazardYear] || 0.05;
+    cumSurvival *= (1 - hazard);
+    weightedMgmt += ramp.mgmt * cumSurvival;
+    weightedTenant += ramp.tenant * cumSurvival;
+    totalSurvival += cumSurvival;
+    yearly.push({ year: y + 1, ramp_mgmt: ramp.mgmt, ramp_tenant: ramp.tenant, survival: cumSurvival });
+  }
+  return {
+    horizon,
+    effective_mgmt_ramp: totalSurvival > 0 ? weightedMgmt / totalSurvival : 1,
+    effective_tenant_ramp: totalSurvival > 0 ? weightedTenant / totalSurvival : 1,
+    expected_years_managed: totalSurvival,
+    yearly,
+  };
+}
 
-  // Net management fee per door per month
+function predictRevenue(input) {
+  const {asset_type, state, doors, rent, mgmt_fee, hold_period,
+         leasing_type, leasing_amount, renewal_type, renewal_amount} = input;
+
+  // Survival-weighted effective ramp factors across the expected hold
+  const hold = computeHoldEconomics(asset_type, hold_period);
+  const effMgmt = hold.effective_mgmt_ramp;
+  const effTenant = hold.effective_tenant_ramp;
+
+  // Net management fee per door per month (vacancy + effective mgmt ramp)
   const vacancyFactor = 1 - (0.5 / 30.5);
-  const mgmtFee = rent * mgmt_fee * vacancyFactor * ramp.mgmt;
+  const mgmtFee = rent * mgmt_fee * vacancyFactor * effMgmt;
 
   // Leasing & renewal: empirical event frequency x property-specific fee
   const rBand = rentBand(rent);
@@ -693,24 +730,22 @@ function predictRevenue(input) {
 
   const leasingFeePerEvent = computeLeasingFee(rent, leasing_type, leasing_amount);
   const renewalFeePerEvent = computeRenewalFee(rent, renewal_type, renewal_amount);
-  // Apply tenant-side ramp factor (newer properties have fewer realized events)
-  const leasingEventsEff = events.leasing * ramp.tenant;
-  const renewalEventsEff = events.renewal * ramp.tenant;
+  const leasingEventsEff = events.leasing * effTenant;
+  const renewalEventsEff = events.renewal * effTenant;
   const leasingMRU = leasingFeePerEvent * leasingEventsEff / 12;
   const renewalMRU = renewalFeePerEvent * renewalEventsEff / 12;
 
-  // Tenant-side fees from lookup
+  // Tenant-side fees from lookup, scaled by effective tenant ramp
   const segKey = asset_type + "|" + state + "|" + rBand;
   let segment = TENANT_FEE_LOOKUP[segKey];
   if (!segment || segment.props < 10) {
     segment = TENANT_FEE_DEFAULT[asset_type];
   }
-
   const tenantFees = {};
   let tenantTotal = 0;
   const keys = ["late","nsf","posting","app_inspect","utility_billing","lease_break","lease_mod","termination","admin_keep","pet_atlas","rbp_net"];
   for (const k of keys) {
-    const v = (segment[k] || 0) * ramp.tenant;
+    const v = (segment[k] || 0) * effTenant;
     tenantFees[k] = v;
     tenantTotal += v;
   }
@@ -727,6 +762,11 @@ function predictRevenue(input) {
     tenant_fees: tenantFees,
     tenant_total: tenantTotal,
     atlas_wallet: mgmtFee + leasingMRU + renewalMRU + tenantTotal,
+    // Hold-period meta
+    effective_mgmt_ramp: effMgmt,
+    effective_tenant_ramp: effTenant,
+    expected_years_managed: hold.expected_years_managed,
+    horizon: hold.horizon,
   };
 }
 
@@ -735,16 +775,10 @@ function predictCost(input) {
   return { ops: COST_FLAT, overhead: 0, total: COST_FLAT };
 }
 
-function lifetimeContribution(monthly, asset_type, startTenureMo) {
-  let total = 0;
-  let survival = 1.0;
-  for (let yr = 0; yr < 5; yr++) {
-    const effYr = Math.min(Math.floor(startTenureMo / 12) + yr, 5);
-    const hazard = RETENTION_HAZARD[asset_type + "|" + effYr] || 0.05;
-    survival *= (1 - hazard);
-    total += monthly * 12 * survival;
-  }
-  return total;
+// Lifetime contribution = blended_contribution × 12 × expected_years_managed
+// Equivalent to summing year-by-year (yearMRU - cost) × 12 × survival
+function lifetimeContribution(blendedContributionPerMonth, expectedYearsManaged) {
+  return blendedContributionPerMonth * 12 * expectedYearsManaged;
 }
 
 function solveBreakeven(input, target = 0) {
@@ -770,7 +804,7 @@ function readInputs() {
     doors: parseInt(document.getElementById("doors").value) || 1,
     rent: parseFloat(document.getElementById("rent").value) || 0,
     mgmt_fee: (parseFloat(document.getElementById("mgmt_fee").value) || 0) / 100,
-    tenure: parseInt(document.getElementById("tenure").value) || 0,
+    hold_period: parseInt(document.getElementById("hold_period").value) || 5,
     leasing_type: document.getElementById("leasing_type").value,
     leasing_amount: parseFloat(document.getElementById("leasing_amount").value) || 0,
     renewal_type: document.getElementById("renewal_type").value,
@@ -798,7 +832,7 @@ function calculate() {
   const contribution = rev.atlas_wallet - cost.total;
   const annual = contribution * 12;
   const breakeven = solveBreakeven(input);
-  const lifetime = lifetimeContribution(contribution, input.asset_type, input.tenure);
+  const lifetime = lifetimeContribution(contribution, rev.expected_years_managed);
 
   // KPIs
   document.getElementById("kpi_wallet").textContent = fmtMoneyWhole(rev.atlas_wallet);
@@ -877,14 +911,14 @@ function findBreakeven() {
 }
 
 const PRESETS = {
-  co_sfr_typical: {asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  co_mf_typical: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  co_mf_new: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  all_other_states_sfr: {asset_type:"Single-Family", state:"TX", doors:1, rent:2200, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  all_other_states_mf: {asset_type:"Multi-Family", state:"TX", doors:6, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_sfr_typical: {asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_typical: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_new: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, hold_period:7, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  all_other_states_sfr: {asset_type:"Single-Family", state:"TX", doors:1, rent:2200, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  all_other_states_mf: {asset_type:"Multi-Family", state:"TX", doors:6, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
 };
 
 function loadPreset(key) {
@@ -894,7 +928,7 @@ function loadPreset(key) {
   document.getElementById("doors").value = p.doors;
   document.getElementById("rent").value = p.rent;
   document.getElementById("mgmt_fee").value = p.mgmt_fee;
-  document.getElementById("tenure").value = p.tenure;
+  document.getElementById("hold_period").value = p.hold_period;
   document.getElementById("leasing_type").value = p.leasing_type;
   document.getElementById("leasing_amount").value = p.leasing_amount;
   document.getElementById("renewal_type").value = p.renewal_type;
@@ -958,6 +992,9 @@ function loadScenarioById(id) {
   const s = scenarios.find(x => x.id === id);
   if (!s) return;
   const i = s.inputs;
+  // Backward compat: old scenarios used `tenure` (months). Map to `hold_period` (years), default 5.
+  const holdPeriod = i.hold_period !== undefined ? i.hold_period :
+                     (i.tenure !== undefined ? Math.max(1, Math.round(i.tenure / 12)) : 5);
   document.getElementById("addr_street").value = i.addr_street || "";
   document.getElementById("addr_city").value = i.addr_city || "";
   document.getElementById("asset_type").value = i.asset_type;
@@ -965,7 +1002,7 @@ function loadScenarioById(id) {
   document.getElementById("doors").value = i.doors;
   document.getElementById("rent").value = i.rent;
   document.getElementById("mgmt_fee").value = (i.mgmt_fee * 100).toFixed(2);
-  document.getElementById("tenure").value = i.tenure;
+  document.getElementById("hold_period").value = holdPeriod;
   document.getElementById("leasing_type").value = i.leasing_type;
   document.getElementById("leasing_amount").value = i.leasing_amount;
   document.getElementById("renewal_type").value = i.renewal_type;
@@ -999,7 +1036,7 @@ function renderSavedScenarios() {
         <div class="scenario-main" onclick="loadScenarioById('${s.id}')">
           <div class="scenario-name">${escapeHtml(s.name)}</div>
           <div class="scenario-meta">
-            ${s.inputs.asset_type} · ${s.inputs.state} · ${s.inputs.doors}d · $${s.inputs.rent}/door · ${(s.inputs.mgmt_fee*100).toFixed(1)}% fee
+            ${s.inputs.asset_type} · ${s.inputs.state} · ${s.inputs.doors}d · $${s.inputs.rent}/door · ${(s.inputs.mgmt_fee*100).toFixed(1)}% fee · ${s.inputs.hold_period || 5}yr hold
           </div>
           <div class="scenario-stats">
             <span class="scenario-pill ${verdict}">${fmtMoneyWhole(r.contribution)}/door/mo</span>
@@ -1037,9 +1074,8 @@ function exportExcel() {
   const breakeven = solveBreakeven(input);
   const lifetime = lifetimeContribution(contribution, input.asset_type, input.tenure);
 
-  // Resolve segment-specific assumptions
-  const tBand = tenureBand(input.tenure);
-  const ramp = TENURE_RAMP[input.asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+  // Resolve segment-specific assumptions; effective ramps already on rev
+  const ramp = { mgmt: rev.effective_mgmt_ramp, tenant: rev.effective_tenant_ramp };
   const rBand = rentBand(input.rent);
   const events = LEASING_EVENTS_LOOKUP[input.asset_type + "|" + rBand]
                  || LEASING_EVENTS_DEFAULT[input.asset_type];
@@ -1258,7 +1294,7 @@ function exportExcel() {
     `${input.doors} door${input.doors !== 1 ? "s" : ""}`,
     `$${input.rent.toLocaleString()}/door/mo`,
     `${(input.mgmt_fee*100).toFixed(2)}% management fee`,
-    `${input.tenure} mo tenure`,
+    `${input.hold_period} year expected hold`,
   ];
   setCell("A5", summaryParts.join("  ·  "), STYLE.propSummary);
   setCell("B5", "", STYLE.propSummary);
@@ -1309,14 +1345,14 @@ function exportExcel() {
   setCell("C13", "", STYLE.sectionHeader);
   setCell("D13", "", STYLE.sectionHeader);
 
-  setCell("A14", "Asset Type",    STYLE.inputLabel); setCell("B14", input.asset_type, STYLE.inputValue);
-  setCell("C14", "Doors",         STYLE.inputLabel); setCell("D14", input.doors,      STYLE.inputValueRight);
-  setCell("A15", "State",         STYLE.inputLabel); setCell("B15", input.state,      STYLE.inputValue);
-  setCell("C15", "Tenure (mo)",   STYLE.inputLabel); setCell("D15", input.tenure,     STYLE.inputValueRight);
-  setCell("A16", "Rent per Door", STYLE.inputLabel);
-  setCell("B16", input.rent,      STYLE.inputValueRight, { z: MONEY });
-  setCell("C16", "Management Fee", STYLE.inputLabel);
-  setCell("D16", input.mgmt_fee,  STYLE.inputValueRight, { z: PCT });
+  setCell("A14", "Asset Type",        STYLE.inputLabel); setCell("B14", input.asset_type, STYLE.inputValue);
+  setCell("C14", "Doors",             STYLE.inputLabel); setCell("D14", input.doors,      STYLE.inputValueRight);
+  setCell("A15", "State",             STYLE.inputLabel); setCell("B15", input.state,      STYLE.inputValue);
+  setCell("C15", "Expected Hold (yr)", STYLE.inputLabel); setCell("D15", input.hold_period, STYLE.inputValueRight);
+  setCell("A16", "Rent per Door",     STYLE.inputLabel);
+  setCell("B16", input.rent,          STYLE.inputValueRight, { z: MONEY });
+  setCell("C16", "Management Fee",    STYLE.inputLabel);
+  setCell("D16", input.mgmt_fee,      STYLE.inputValueRight, { z: PCT });
 
   // ===== LEASING & RENEWAL (row 18 header, rows 19-20) =====
   setCell("A18", "LEASING & RENEWAL TERMS", STYLE.sectionHeader);
@@ -1368,14 +1404,18 @@ function exportExcel() {
     ? `Portfolio default (${input.asset_type}, thin segment)`
     : `${input.asset_type} · ${input.state} · ${rentBandLabel}`;
 
-  setCell("A23", "Mgmt Fee Ramp",        STYLE.assumptionLabel); setCell("B23", ramp.mgmt,      STYLE.assumptionValue, { z: NUM4 });
-  setCell("C23", "Leasing Events / yr",  STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
-  setCell("A24", "Tenant Fee Ramp",      STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
-  setCell("C24", "Renewal Events / yr",  STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
-  setCell("A25", "Vacancy Adjustment",   STYLE.assumptionLabel);
+  setCell("A23", "Effective Mgmt Ramp",   STYLE.assumptionLabel); setCell("B23", ramp.mgmt,      STYLE.assumptionValue, { z: NUM4 });
+  setCell("C23", "Leasing Events / yr",   STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A24", "Effective Tenant Ramp", STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
+  setCell("C24", "Renewal Events / yr",   STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A25", "Vacancy Adjustment",    STYLE.assumptionLabel);
   setFormula("B25", "1-0.5/30.5", 1 - 0.5/30.5, STYLE.assumptionValue, { z: NUM4 });
-  setCell("C25", "Data Segment",         STYLE.assumptionLabel);
-  setCell("D25", segmentSource, { ...STYLE.assumptionValue, alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+  setCell("C25", "Expected Yrs Managed",  STYLE.assumptionLabel);
+  setCell("D25", rev.expected_years_managed, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A26", "Data Segment",          STYLE.assumptionLabel);
+  setCell("B26", segmentSource, { ...STYLE.assumptionValue, alignment: { horizontal: "left", vertical: "center", indent: 1 } });
+  setCell("C26", "", STYLE.assumptionLabel);
+  setCell("D26", "", STYLE.assumptionLabel);
 
   // ===== REVENUE BREAKDOWN (row 28 header, row 29 col header, rows 30-43 lines, row 44 total) =====
   setCell("A28", "REVENUE BREAKDOWN  (Atlas-keep, per door per month)", STYLE.sectionHeader);
@@ -1518,6 +1558,7 @@ function exportExcel() {
     { s: { r: 12, c: 0 }, e: { r: 12, c: 3 } }, // A13:D13 prop inputs header
     { s: { r: 17, c: 0 }, e: { r: 17, c: 3 } }, // A18:D18 leasing header
     { s: { r: 21, c: 0 }, e: { r: 21, c: 3 } }, // A22:D22 assumptions header
+    { s: { r: 25, c: 1 }, e: { r: 25, c: 3 } }, // B26:D26 segment text
     { s: { r: 27, c: 0 }, e: { r: 27, c: 3 } }, // A28:D28 revenue header
     { s: { r: 28, c: 0 }, e: { r: 28, c: 2 } }, // A29:C29 component col header
     { s: { r: 29, c: 0 }, e: { r: 29, c: 2 } }, // A30:C30 net mgmt fee
@@ -1568,7 +1609,7 @@ function exportPDF() {
   const printHeader = document.getElementById("print_header");
   if (printHeader) {
     const addr = titleParts.length > 0 ? titleParts.join(", ") : "Atlas MRU Estimate";
-    const meta = `${document.getElementById("asset_type").value} · ${document.getElementById("doors").value} door(s) · $${document.getElementById("rent").value}/door/mo · ${document.getElementById("mgmt_fee").value}% management fee · ${document.getElementById("tenure").value} months tenure`;
+    const meta = `${document.getElementById("asset_type").value} · ${document.getElementById("doors").value} door(s) · $${document.getElementById("rent").value}/door/mo · ${document.getElementById("mgmt_fee").value}% management fee · ${document.getElementById("hold_period").value} year expected hold`;
     printHeader.innerHTML = `
       <div class="print-title">${escapeHtml(addr)}</div>
       <div class="print-subtitle">Atlas MRU Estimate &middot; ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</div>
@@ -1580,7 +1621,7 @@ function exportPDF() {
 }
 
 // Auto-calc on input change
-["addr_street","addr_city","asset_type","state","doors","rent","mgmt_fee","tenure",
+["addr_street","addr_city","asset_type","state","doors","rent","mgmt_fee","hold_period",
  "leasing_type","leasing_amount","renewal_type","renewal_amount"].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
