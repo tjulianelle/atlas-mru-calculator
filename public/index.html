@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Atlas MRU Calculator</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root {
     --atlas-navy: #1F3A5F;
@@ -453,6 +454,7 @@
     <button class="secondary" onclick="findBreakeven()">Solve Breakeven Fee</button>
     <button class="secondary" onclick="saveCurrentScenario()">Save Scenario</button>
     <button class="secondary" onclick="exportPDF()">Export PDF</button>
+    <button class="secondary" onclick="exportExcel()">Export to Excel</button>
 
     <h3>Quick Presets</h3>
     <div class="presets">
@@ -1014,6 +1016,173 @@ function renderSavedScenarios() {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// =====================================================================
+// EXCEL EXPORT — generates a real .xlsx file with live formulas
+// =====================================================================
+function exportExcel() {
+  if (typeof XLSX === "undefined") {
+    alert("Excel library failed to load. Check your internet connection and try again.");
+    return;
+  }
+
+  const input = readInputs();
+  const rev = predictRevenue(input);
+  const cost = predictCost(input);
+  const contribution = rev.atlas_wallet - cost.total;
+  const breakeven = solveBreakeven(input);
+  const lifetime = lifetimeContribution(contribution, input.asset_type, input.tenure);
+
+  // Resolve segment-specific assumptions to bake into the spreadsheet
+  const tBand = tenureBand(input.tenure);
+  const ramp = TENURE_RAMP[input.asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+  const rBand = rentBand(input.rent);
+  const events = LEASING_EVENTS_LOOKUP[input.asset_type + "|" + rBand]
+                 || LEASING_EVENTS_DEFAULT[input.asset_type];
+  const segKey = input.asset_type + "|" + input.state + "|" + rBand;
+  let segment = TENANT_FEE_LOOKUP[segKey];
+  const usingDefault = !segment || segment.props < 10;
+  if (usingDefault) segment = TENANT_FEE_DEFAULT[input.asset_type];
+
+  // Build the sheet cell-by-cell
+  const sheet = {};
+  const $ = {
+    cell: (addr, val, opts) => { sheet[addr] = { v: val, t: typeof val === "number" ? "n" : "s", ...(opts || {}) }; },
+    formula: (addr, formula, computed, opts) => { sheet[addr] = { f: formula, v: computed, t: "n", ...(opts || {}) }; },
+  };
+  const MONEY = '"$"#,##0.00';
+  const MONEY_WHOLE = '"$"#,##0';
+  const PCT = '0.00%';
+  const NUM4 = '0.0000';
+
+  // Title block
+  const addressLine = [input.addr_street, input.addr_city, input.state].filter(Boolean).join(", ") || "(no address)";
+  $.cell("A1", "Atlas MRU Estimate");
+  $.cell("A2", addressLine);
+  $.cell("A3", "Generated:");
+  $.cell("B3", new Date().toLocaleDateString("en-US", {month:"long", day:"numeric", year:"numeric"}));
+
+  // Property inputs (yellow zone — editable)
+  $.cell("A5", "PROPERTY INPUTS");
+  $.cell("A6", "Asset Type"); $.cell("B6", input.asset_type);
+  $.cell("A7", "State");      $.cell("B7", input.state);
+  $.cell("A8", "Doors");      $.cell("B8", input.doors);
+  $.cell("A9", "Rent per Door (monthly)"); $.cell("B9", input.rent, {z: MONEY});
+  $.cell("A10","Management Fee %");        $.cell("B10", input.mgmt_fee, {z: PCT});
+  $.cell("A11","Tenure (months)");         $.cell("B11", input.tenure);
+
+  // Leasing & renewal terms
+  $.cell("A13", "LEASING & RENEWAL TERMS");
+  $.cell("A14","Leasing Fee Type (pct_first_month / flat / none)"); $.cell("B14", input.leasing_type);
+  $.cell("A15","Leasing Fee Amount (% if pct, $ if flat)");         $.cell("B15", input.leasing_amount);
+  $.cell("A16","Renewal Fee Type (pct_rent / flat / none)");        $.cell("B16", input.renewal_type);
+  $.cell("A17","Renewal Fee Amount (% if pct, $ if flat)");         $.cell("B17", input.renewal_amount);
+
+  // Empirical assumptions (resolved at export time from Snowflake TTM data)
+  $.cell("A19", "EMPIRICAL ASSUMPTIONS (from Snowflake bill data, TTM April 2026)");
+  $.cell("A20","Mgmt fee ramp factor (tenure-adjusted)");           $.cell("B20", ramp.mgmt, {z: NUM4});
+  $.cell("A21","Tenant fee ramp factor (tenure-adjusted)");         $.cell("B21", ramp.tenant, {z: NUM4});
+  $.cell("A22","Leasing events per door per year");                 $.cell("B22", events.leasing, {z: NUM4});
+  $.cell("A23","Renewal events per door per year");                 $.cell("B23", events.renewal, {z: NUM4});
+  $.cell("A24","Segment used");
+  $.cell("B24", usingDefault ? `Portfolio default (${input.asset_type})` : segKey);
+
+  // Tenant fee line items (Atlas-keep, segment lookup)
+  $.cell("A26", "TENANT FEES PER DOOR PER MONTH (Atlas-keep, pre-ramp)");
+  const feeRows = [
+    ["Late fee",                          segment.late,             27],
+    ["NSF",                               segment.nsf,              28],
+    ["Posting",                           segment.posting,          29],
+    ["Application + inspection",          segment.app_inspect,      30],
+    ["Utility billing",                   segment.utility_billing,  31],
+    ["Lease break",                       segment.lease_break,      32],
+    ["Lease modification",                segment.lease_mod,        33],
+    ["Termination",                       segment.termination,      34],
+    ["Admin (Atlas-keep)",                segment.admin_keep,       35],
+    ["Pet non-refundable (Atlas share)",  segment.pet_atlas,        36],
+    ["RBP (net of expense)",              segment.rbp_net,          37],
+  ];
+  feeRows.forEach(([label, val, row]) => {
+    $.cell(`A${row}`, label);
+    $.cell(`B${row}`, val || 0, {z: MONEY});
+  });
+  const tenantPreRamp = feeRows.reduce((sum, [, val]) => sum + (val || 0), 0);
+
+  // Revenue build (live formulas)
+  $.cell("A39", "REVENUE BUILD (formulas — auto-recalculate)");
+  $.cell("A40", "Vacancy factor");
+  $.formula("B40", "1-0.5/30.5", 1 - 0.5/30.5, {z: NUM4});
+
+  $.cell("A41", "Net management fee per door per month");
+  $.formula("B41", "B9*B10*B40*B20", input.rent * input.mgmt_fee * (1 - 0.5/30.5) * ramp.mgmt, {z: MONEY});
+
+  $.cell("A42", "Leasing fee per event ($)");
+  $.formula("B42",
+    'IF(B14="pct_first_month",B9*B15/100,IF(B14="flat",B15,0))',
+    computeLeasingFee(input.rent, input.leasing_type, input.leasing_amount),
+    {z: MONEY});
+
+  $.cell("A43", "Renewal fee per event ($)");
+  $.formula("B43",
+    'IF(B16="pct_rent",B9*B17/100,IF(B16="flat",B17,0))',
+    computeRenewalFee(input.rent, input.renewal_type, input.renewal_amount),
+    {z: MONEY});
+
+  $.cell("A44", "Leasing MRU per door per month");
+  $.formula("B44", "B42*B22*B21/12", rev.leasing, {z: MONEY});
+
+  $.cell("A45", "Renewal MRU per door per month");
+  $.formula("B45", "B43*B23*B21/12", rev.renewal, {z: MONEY});
+
+  $.cell("A46", "Tenant fees subtotal (pre-ramp)");
+  $.formula("B46", "SUM(B27:B37)", tenantPreRamp, {z: MONEY});
+
+  $.cell("A47", "Tenant fees per door per month (ramp-adjusted)");
+  $.formula("B47", "B46*B21", rev.tenant_total, {z: MONEY});
+
+  $.cell("A48", "ATLAS MRU PER DOOR PER MONTH");
+  $.formula("B48", "B41+B44+B45+B47", rev.atlas_wallet, {z: MONEY});
+
+  // Cost & contribution
+  $.cell("A50", "COST & CONTRIBUTION");
+  $.cell("A51", "Cost-to-serve per door per month (flat)");
+  $.cell("B51", cost.total, {z: MONEY});
+
+  $.cell("A52", "Contribution per door per month");
+  $.formula("B52", "B48-B51", contribution, {z: MONEY});
+
+  $.cell("A53", "Annual contribution per door");
+  $.formula("B53", "B52*12", contribution * 12, {z: MONEY_WHOLE});
+
+  $.cell("A54", "5-yr lifetime contribution per door (retention-adjusted)");
+  $.cell("B54", lifetime, {z: MONEY_WHOLE});
+
+  $.cell("A55", "Breakeven management fee %");
+  $.cell("B55", breakeven !== null ? breakeven : 0, {z: PCT});
+
+  // Notes
+  $.cell("A57", "NOTES");
+  $.cell("A58", "Live formulas: Atlas MRU, Contribution, and Annual Contribution recalculate when you edit Property Inputs or Leasing & Renewal Terms.");
+  $.cell("A59", "Static at export time: Mgmt/tenant ramp, leasing/renewal event frequencies, and tenant fee line items reflect the segment selected at export. Changing State or Asset Type in Excel will NOT re-pull these values.");
+  $.cell("A60", "Lifetime and Breakeven are computed at export time and shown as values, not formulas.");
+  $.cell("A61", "To refresh empirical assumptions, change inputs in the web calculator and re-export.");
+
+  sheet["!ref"] = "A1:B61";
+  sheet["!cols"] = [{wch: 58}, {wch: 24}];
+  sheet["!merges"] = [
+    {s:{r:0,c:0}, e:{r:0,c:1}},  // A1:B1 title
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet, "MRU Estimate");
+
+  // Filename based on address + date
+  const namePart = [input.addr_street, input.addr_city]
+    .filter(Boolean).join("_").replace(/[^a-zA-Z0-9_-]/g, "_") || "property";
+  const filename = `Atlas_MRU_${namePart}_${new Date().toISOString().slice(0,10)}.xlsx`;
+
+  XLSX.writeFile(wb, filename);
 }
 
 // =====================================================================
