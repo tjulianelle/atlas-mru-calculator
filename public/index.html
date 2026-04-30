@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Atlas MRU Calculator</title>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
   :root {
     --atlas-navy: #1F3A5F;
@@ -1019,7 +1019,10 @@ function escapeHtml(s) {
 }
 
 // =====================================================================
-// EXCEL EXPORT — generates a real .xlsx file with live formulas
+// EXCEL EXPORT — branded, styled .xlsx with live formulas
+// Uses xlsx-js-style for full font / fill / border / alignment support
+// Layout mirrors the web app: title bar, address, verdict, KPIs, inputs,
+// revenue breakdown, cost & contribution, notes.
 // =====================================================================
 function exportExcel() {
   if (typeof XLSX === "undefined") {
@@ -1034,7 +1037,7 @@ function exportExcel() {
   const breakeven = solveBreakeven(input);
   const lifetime = lifetimeContribution(contribution, input.asset_type, input.tenure);
 
-  // Resolve segment-specific assumptions to bake into the spreadsheet
+  // Resolve segment-specific assumptions
   const tBand = tenureBand(input.tenure);
   const ramp = TENURE_RAMP[input.asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
   const rBand = rentBand(input.rent);
@@ -1045,139 +1048,476 @@ function exportExcel() {
   const usingDefault = !segment || segment.props < 10;
   if (usingDefault) segment = TENANT_FEE_DEFAULT[input.asset_type];
 
-  // Build the sheet cell-by-cell
-  const sheet = {};
-  const $ = {
-    cell: (addr, val, opts) => { sheet[addr] = { v: val, t: typeof val === "number" ? "n" : "s", ...(opts || {}) }; },
-    formula: (addr, formula, computed, opts) => { sheet[addr] = { f: formula, v: computed, t: "n", ...(opts || {}) }; },
+  // ATLAS COLOR PALETTE (no leading # for SheetJS)
+  const C = {
+    NAVY: "1F3A5F", BLUE: "2E5984", GOLD: "C8A063",
+    LIGHT: "F5F6F8", MID: "E1E5EB", DARK: "2A2D31", MUTED: "888888",
+    GOOD_BG: "E5F2EC", GOOD_FG: "1F5736", GOOD_BORDER: "2D7A4F",
+    WARN_BG: "FBF1E2", WARN_FG: "84541C", WARN_BORDER: "C77B27",
+    BAD_BG:  "F7E5E5", BAD_FG:  "802929", BAD_BORDER:  "B23A3A",
+    INPUT_YELLOW: "FFF9E5", ASSUMPTION_GRAY: "F0F0F0",
+    WHITE: "FFFFFF",
   };
-  const MONEY = '"$"#,##0.00';
-  const MONEY_WHOLE = '"$"#,##0';
-  const PCT = '0.00%';
-  const NUM4 = '0.0000';
+  const FONT = "Calibri";
+  const MONEY = '"$"#,##0.00', MONEY_WHOLE = '"$"#,##0', PCT = '0.00%', NUM4 = '0.0000';
 
-  // Title block
+  // Style factory helpers
+  const thinBorder = { style: "thin", color: { rgb: C.MID } };
+  const fullThinBorder = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
+
+  const STYLE = {
+    titleBar: {
+      font: { name: FONT, sz: 22, bold: true, color: { rgb: C.WHITE } },
+      fill: { patternType: "solid", fgColor: { rgb: C.NAVY } },
+      alignment: { horizontal: "left", vertical: "center", indent: 1 },
+    },
+    titleAccent: {
+      fill: { patternType: "solid", fgColor: { rgb: C.GOLD } },
+    },
+    subtitle: {
+      font: { name: FONT, sz: 9, italic: true, color: { rgb: C.MUTED } },
+      alignment: { horizontal: "left", indent: 1 },
+    },
+    propAddress: {
+      font: { name: FONT, sz: 16, bold: true, color: { rgb: C.NAVY } },
+      alignment: { horizontal: "left", vertical: "center" },
+    },
+    propSummary: {
+      font: { name: FONT, sz: 10, color: { rgb: "555555" } },
+      alignment: { horizontal: "left", vertical: "center" },
+    },
+    verdict: (kind) => ({
+      font: { name: FONT, sz: 12, bold: true, color: { rgb: C[kind + "_FG"] } },
+      fill: { patternType: "solid", fgColor: { rgb: C[kind + "_BG"] } },
+      alignment: { horizontal: "left", vertical: "center", indent: 1, wrapText: true },
+      border: {
+        left: { style: "thick", color: { rgb: C[kind + "_BORDER"] } },
+        top: { style: "thin", color: { rgb: C[kind + "_BORDER"] } },
+        bottom: { style: "thin", color: { rgb: C[kind + "_BORDER"] } },
+        right: { style: "thin", color: { rgb: C[kind + "_BORDER"] } },
+      },
+    }),
+    kpiLabel: {
+      font: { name: FONT, sz: 8, bold: true, color: { rgb: "666666" } },
+      fill: { patternType: "solid", fgColor: { rgb: C.LIGHT } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: C.BLUE } },
+        left: { style: "thin", color: { rgb: C.MID } },
+        right: { style: "thin", color: { rgb: C.MID } },
+      },
+    },
+    kpiValue: (color) => ({
+      font: { name: FONT, sz: 18, bold: true, color: { rgb: color || C.NAVY } },
+      fill: { patternType: "solid", fgColor: { rgb: C.LIGHT } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        left: { style: "thin", color: { rgb: C.MID } },
+        right: { style: "thin", color: { rgb: C.MID } },
+      },
+    }),
+    kpiSub: {
+      font: { name: FONT, sz: 8, color: { rgb: C.MUTED } },
+      fill: { patternType: "solid", fgColor: { rgb: C.LIGHT } },
+      alignment: { horizontal: "center", vertical: "center" },
+      border: {
+        bottom: { style: "thin", color: { rgb: C.MID } },
+        left: { style: "thin", color: { rgb: C.MID } },
+        right: { style: "thin", color: { rgb: C.MID } },
+      },
+    },
+    sectionHeader: {
+      font: { name: FONT, sz: 11, bold: true, color: { rgb: C.NAVY } },
+      alignment: { horizontal: "left", vertical: "center", indent: 0 },
+      border: { bottom: { style: "medium", color: { rgb: C.GOLD } } },
+    },
+    inputLabel: {
+      font: { name: FONT, sz: 10, bold: true, color: { rgb: "666666" } },
+      alignment: { horizontal: "left", vertical: "center" },
+    },
+    inputValue: {
+      font: { name: FONT, sz: 10, color: { rgb: C.DARK } },
+      fill: { patternType: "solid", fgColor: { rgb: C.INPUT_YELLOW } },
+      alignment: { horizontal: "left", vertical: "center", indent: 1 },
+      border: fullThinBorder,
+    },
+    inputValueRight: {
+      font: { name: FONT, sz: 10, color: { rgb: C.DARK } },
+      fill: { patternType: "solid", fgColor: { rgb: C.INPUT_YELLOW } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: fullThinBorder,
+    },
+    assumptionLabel: {
+      font: { name: FONT, sz: 10, color: { rgb: "666666" } },
+      alignment: { horizontal: "left", vertical: "center" },
+    },
+    assumptionValue: {
+      font: { name: FONT, sz: 10, color: { rgb: C.DARK } },
+      fill: { patternType: "solid", fgColor: { rgb: C.ASSUMPTION_GRAY } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: fullThinBorder,
+    },
+    tableColHeader: {
+      font: { name: FONT, sz: 9, bold: true, color: { rgb: C.NAVY } },
+      fill: { patternType: "solid", fgColor: { rgb: C.LIGHT } },
+      alignment: { horizontal: "left", vertical: "center", indent: 0 },
+      border: {
+        top: { style: "medium", color: { rgb: C.NAVY } },
+        bottom: { style: "thin", color: { rgb: C.MID } },
+      },
+    },
+    tableColHeaderRight: {
+      font: { name: FONT, sz: 9, bold: true, color: { rgb: C.NAVY } },
+      fill: { patternType: "solid", fgColor: { rgb: C.LIGHT } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: {
+        top: { style: "medium", color: { rgb: C.NAVY } },
+        bottom: { style: "thin", color: { rgb: C.MID } },
+      },
+    },
+    tableRowLabel: {
+      font: { name: FONT, sz: 10, color: { rgb: C.DARK } },
+      alignment: { horizontal: "left", vertical: "center" },
+      border: { bottom: { style: "thin", color: { rgb: C.MID } } },
+    },
+    tableRowValue: {
+      font: { name: FONT, sz: 10, color: { rgb: C.DARK } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: { bottom: { style: "thin", color: { rgb: C.MID } } },
+      numFmt: MONEY,
+    },
+    tableTotalLabel: {
+      font: { name: FONT, sz: 11, bold: true, color: { rgb: C.WHITE } },
+      fill: { patternType: "solid", fgColor: { rgb: C.NAVY } },
+      alignment: { horizontal: "left", vertical: "center", indent: 0 },
+      border: { top: { style: "medium", color: { rgb: C.NAVY } } },
+    },
+    tableTotalValue: {
+      font: { name: FONT, sz: 11, bold: true, color: { rgb: C.WHITE } },
+      fill: { patternType: "solid", fgColor: { rgb: C.NAVY } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: { top: { style: "medium", color: { rgb: C.NAVY } } },
+      numFmt: MONEY,
+    },
+    contribValue: (good) => ({
+      font: { name: FONT, sz: 11, bold: true, color: { rgb: good ? C.GOOD_FG : C.BAD_FG } },
+      fill: { patternType: "solid", fgColor: { rgb: good ? C.GOOD_BG : C.BAD_BG } },
+      alignment: { horizontal: "right", vertical: "center" },
+      border: fullThinBorder,
+      numFmt: MONEY,
+    }),
+    notesHeader: {
+      font: { name: FONT, sz: 9, bold: true, color: { rgb: C.MUTED } },
+      alignment: { horizontal: "left" },
+    },
+    notesBody: {
+      font: { name: FONT, sz: 9, italic: true, color: { rgb: C.MUTED } },
+      alignment: { horizontal: "left", vertical: "top", wrapText: true },
+    },
+  };
+
+  // Sheet builder helper
+  const sheet = {};
+  function setCell(addr, val, style, opts) {
+    const cell = { v: val, t: typeof val === "number" ? "n" : "s" };
+    if (style) cell.s = style;
+    if (opts && opts.z) cell.z = opts.z;
+    sheet[addr] = cell;
+  }
+  function setFormula(addr, formula, computed, style, opts) {
+    const cell = { f: formula, v: computed, t: "n" };
+    if (style) cell.s = style;
+    if (opts && opts.z) cell.z = opts.z;
+    sheet[addr] = cell;
+  }
+
+  // ===== TITLE BAR (row 1) =====
+  setCell("A1", "Atlas MRU Estimate", STYLE.titleBar);
+  setCell("B1", "", STYLE.titleBar);
+  setCell("C1", "", STYLE.titleBar);
+  setCell("D1", "", STYLE.titleBar);
+
+  // Subtitle row (row 2)
+  setCell("A2",
+    `Atlas Real Estate  ·  3rd Party Property Management  ·  Generated ${new Date().toLocaleDateString("en-US", {month:"long", day:"numeric", year:"numeric"})}`,
+    STYLE.subtitle);
+  setCell("B2", "", STYLE.subtitle);
+  setCell("C2", "", STYLE.subtitle);
+  setCell("D2", "", STYLE.subtitle);
+
+  // ===== PROPERTY ADDRESS (row 4) =====
   const addressLine = [input.addr_street, input.addr_city, input.state].filter(Boolean).join(", ") || "(no address)";
-  $.cell("A1", "Atlas MRU Estimate");
-  $.cell("A2", addressLine);
-  $.cell("A3", "Generated:");
-  $.cell("B3", new Date().toLocaleDateString("en-US", {month:"long", day:"numeric", year:"numeric"}));
+  setCell("A4", addressLine, STYLE.propAddress);
+  setCell("B4", "", STYLE.propAddress);
+  setCell("C4", "", STYLE.propAddress);
+  setCell("D4", "", STYLE.propAddress);
 
-  // Property inputs (yellow zone — editable)
-  $.cell("A5", "PROPERTY INPUTS");
-  $.cell("A6", "Asset Type"); $.cell("B6", input.asset_type);
-  $.cell("A7", "State");      $.cell("B7", input.state);
-  $.cell("A8", "Doors");      $.cell("B8", input.doors);
-  $.cell("A9", "Rent per Door (monthly)"); $.cell("B9", input.rent, {z: MONEY});
-  $.cell("A10","Management Fee %");        $.cell("B10", input.mgmt_fee, {z: PCT});
-  $.cell("A11","Tenure (months)");         $.cell("B11", input.tenure);
-
-  // Leasing & renewal terms
-  $.cell("A13", "LEASING & RENEWAL TERMS");
-  $.cell("A14","Leasing Fee Type (pct_first_month / flat / none)"); $.cell("B14", input.leasing_type);
-  $.cell("A15","Leasing Fee Amount (% if pct, $ if flat)");         $.cell("B15", input.leasing_amount);
-  $.cell("A16","Renewal Fee Type (pct_rent / flat / none)");        $.cell("B16", input.renewal_type);
-  $.cell("A17","Renewal Fee Amount (% if pct, $ if flat)");         $.cell("B17", input.renewal_amount);
-
-  // Empirical assumptions (resolved at export time from Snowflake TTM data)
-  $.cell("A19", "EMPIRICAL ASSUMPTIONS (from Snowflake bill data, TTM April 2026)");
-  $.cell("A20","Mgmt fee ramp factor (tenure-adjusted)");           $.cell("B20", ramp.mgmt, {z: NUM4});
-  $.cell("A21","Tenant fee ramp factor (tenure-adjusted)");         $.cell("B21", ramp.tenant, {z: NUM4});
-  $.cell("A22","Leasing events per door per year");                 $.cell("B22", events.leasing, {z: NUM4});
-  $.cell("A23","Renewal events per door per year");                 $.cell("B23", events.renewal, {z: NUM4});
-  $.cell("A24","Segment used");
-  $.cell("B24", usingDefault ? `Portfolio default (${input.asset_type})` : segKey);
-
-  // Tenant fee line items (Atlas-keep, segment lookup)
-  $.cell("A26", "TENANT FEES PER DOOR PER MONTH (Atlas-keep, pre-ramp)");
-  const feeRows = [
-    ["Late fee",                          segment.late,             27],
-    ["NSF",                               segment.nsf,              28],
-    ["Posting",                           segment.posting,          29],
-    ["Application + inspection",          segment.app_inspect,      30],
-    ["Utility billing",                   segment.utility_billing,  31],
-    ["Lease break",                       segment.lease_break,      32],
-    ["Lease modification",                segment.lease_mod,        33],
-    ["Termination",                       segment.termination,      34],
-    ["Admin (Atlas-keep)",                segment.admin_keep,       35],
-    ["Pet non-refundable (Atlas share)",  segment.pet_atlas,        36],
-    ["RBP (net of expense)",              segment.rbp_net,          37],
+  // Property summary line (row 5)
+  const summaryParts = [
+    input.asset_type,
+    `${input.doors} door${input.doors !== 1 ? "s" : ""}`,
+    `$${input.rent.toLocaleString()}/door/mo`,
+    `${(input.mgmt_fee*100).toFixed(2)}% management fee`,
+    `${input.tenure} mo tenure`,
   ];
-  feeRows.forEach(([label, val, row]) => {
-    $.cell(`A${row}`, label);
-    $.cell(`B${row}`, val || 0, {z: MONEY});
-  });
-  const tenantPreRamp = feeRows.reduce((sum, [, val]) => sum + (val || 0), 0);
+  setCell("A5", summaryParts.join("  ·  "), STYLE.propSummary);
+  setCell("B5", "", STYLE.propSummary);
+  setCell("C5", "", STYLE.propSummary);
+  setCell("D5", "", STYLE.propSummary);
 
-  // Revenue build (live formulas)
-  $.cell("A39", "REVENUE BUILD (formulas — auto-recalculate)");
-  $.cell("A40", "Vacancy factor");
-  $.formula("B40", "1-0.5/30.5", 1 - 0.5/30.5, {z: NUM4});
+  // ===== VERDICT (row 7) =====
+  let verdictKind, verdictTitle, verdictDetail;
+  if (contribution > 50) {
+    verdictKind = "GOOD";
+    verdictTitle = "ACCEPT";
+    verdictDetail = `Property generates ${fmtMoneyWhole(contribution)}/door/month at ${(input.mgmt_fee*100).toFixed(2)}% management fee. Healthy margin above the cost-to-serve threshold.`;
+  } else if (contribution >= 0) {
+    verdictKind = "WARN";
+    verdictTitle = "MARGINAL";
+    verdictDetail = `Property barely clears breakeven (${fmtMoneyWhole(contribution)}/door/month). Consider raising the management fee toward ${breakeven !== null ? (breakeven*100).toFixed(2) + "%" : "the breakeven"} or declining if the relationship doesn't carry strategic value.`;
+  } else {
+    verdictKind = "BAD";
+    verdictTitle = "DECLINE OR REPRICE";
+    verdictDetail = `Property loses ${fmtMoneyWhole(Math.abs(contribution))}/door/month at the proposed fee. ${breakeven !== null ? "Raise the management fee to " + (breakeven*100).toFixed(2) + "% to clear breakeven, or decline." : "Cannot break even at any reasonable fee. Decline."}`;
+  }
+  setCell("A7", `${verdictTitle}    ${verdictDetail}`, STYLE.verdict(verdictKind));
+  setCell("B7", "", STYLE.verdict(verdictKind));
+  setCell("C7", "", STYLE.verdict(verdictKind));
+  setCell("D7", "", STYLE.verdict(verdictKind));
 
-  $.cell("A41", "Net management fee per door per month");
-  $.formula("B41", "B9*B10*B40*B20", input.rent * input.mgmt_fee * (1 - 0.5/30.5) * ramp.mgmt, {z: MONEY});
+  // ===== KPI CARDS (rows 9-11) =====
+  // Labels row 9
+  setCell("A9", "ATLAS MRU", STYLE.kpiLabel);
+  setCell("B9", "COST-TO-SERVE", STYLE.kpiLabel);
+  setCell("C9", "CONTRIBUTION", STYLE.kpiLabel);
+  setCell("D9", "BREAKEVEN FEE", STYLE.kpiLabel);
+  // Values row 10
+  const contribKpiColor = contribution >= 0 ? C.GOOD_FG : C.BAD_FG;
+  setCell("A10", rev.atlas_wallet, STYLE.kpiValue(C.NAVY), { z: MONEY_WHOLE });
+  setCell("B10", cost.total, STYLE.kpiValue(C.NAVY), { z: MONEY_WHOLE });
+  setCell("C10", contribution, STYLE.kpiValue(contribKpiColor), { z: MONEY_WHOLE });
+  setCell("D10", breakeven !== null ? breakeven : 0, STYLE.kpiValue(C.NAVY), { z: PCT });
+  // Sub row 11
+  setCell("A11", "per door / month", STYLE.kpiSub);
+  setCell("B11", "per door / month", STYLE.kpiSub);
+  setCell("C11", "per door / month", STYLE.kpiSub);
+  setCell("D11", "to clear $0 contribution", STYLE.kpiSub);
 
-  $.cell("A42", "Leasing fee per event ($)");
-  $.formula("B42",
-    'IF(B14="pct_first_month",B9*B15/100,IF(B14="flat",B15,0))',
+  // ===== PROPERTY INPUTS (row 13 header, rows 14-16 fields) =====
+  setCell("A13", "PROPERTY INPUTS", STYLE.sectionHeader);
+  setCell("B13", "", STYLE.sectionHeader);
+  setCell("C13", "", STYLE.sectionHeader);
+  setCell("D13", "", STYLE.sectionHeader);
+
+  setCell("A14", "Asset Type",    STYLE.inputLabel); setCell("B14", input.asset_type, STYLE.inputValue);
+  setCell("C14", "Doors",         STYLE.inputLabel); setCell("D14", input.doors,      STYLE.inputValueRight);
+  setCell("A15", "State",         STYLE.inputLabel); setCell("B15", input.state,      STYLE.inputValue);
+  setCell("C15", "Tenure (mo)",   STYLE.inputLabel); setCell("D15", input.tenure,     STYLE.inputValueRight);
+  setCell("A16", "Rent per Door", STYLE.inputLabel);
+  setCell("B16", input.rent,      STYLE.inputValueRight, { z: MONEY });
+  setCell("C16", "Management Fee", STYLE.inputLabel);
+  setCell("D16", input.mgmt_fee,  STYLE.inputValueRight, { z: PCT });
+
+  // ===== LEASING & RENEWAL (row 18 header, rows 19-20) =====
+  setCell("A18", "LEASING & RENEWAL TERMS", STYLE.sectionHeader);
+  setCell("B18", "", STYLE.sectionHeader);
+  setCell("C18", "", STYLE.sectionHeader);
+  setCell("D18", "", STYLE.sectionHeader);
+
+  setCell("A19", "Leasing Fee Type",  STYLE.inputLabel); setCell("B19", input.leasing_type,   STYLE.inputValue);
+  setCell("C19", "Leasing Amount",    STYLE.inputLabel); setCell("D19", input.leasing_amount, STYLE.inputValueRight);
+  setCell("A20", "Renewal Fee Type",  STYLE.inputLabel); setCell("B20", input.renewal_type,   STYLE.inputValue);
+  setCell("C20", "Renewal Amount",    STYLE.inputLabel); setCell("D20", input.renewal_amount, STYLE.inputValueRight);
+
+  // ===== EMPIRICAL ASSUMPTIONS (row 22 header, rows 23-25) =====
+  setCell("A22", "EMPIRICAL ASSUMPTIONS  (resolved at export from Snowflake TTM data)", STYLE.sectionHeader);
+  setCell("B22", "", STYLE.sectionHeader);
+  setCell("C22", "", STYLE.sectionHeader);
+  setCell("D22", "", STYLE.sectionHeader);
+
+  setCell("A23", "Mgmt Fee Ramp",      STYLE.assumptionLabel); setCell("B23", ramp.mgmt,      STYLE.assumptionValue, { z: NUM4 });
+  setCell("C23", "Leasing Events / yr", STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A24", "Tenant Fee Ramp",    STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
+  setCell("C24", "Renewal Events / yr", STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A25", "Vacancy Factor",     STYLE.assumptionLabel);
+  setFormula("B25", "1-0.5/30.5", 1 - 0.5/30.5, STYLE.assumptionValue, { z: NUM4 });
+  setCell("C25", "Segment Source",     STYLE.assumptionLabel);
+  setCell("D25", usingDefault ? "Portfolio default" : segKey, STYLE.assumptionValue);
+  // Helper formula cells (leasing/renewal fee per event) — keep same row, off to the side
+  setCell("A26", "Leasing Fee / Event", STYLE.assumptionLabel);
+  setFormula("B26",
+    'IF(B19="pct_first_month",B16*D19/100,IF(B19="flat",D19,0))',
     computeLeasingFee(input.rent, input.leasing_type, input.leasing_amount),
-    {z: MONEY});
-
-  $.cell("A43", "Renewal fee per event ($)");
-  $.formula("B43",
-    'IF(B16="pct_rent",B9*B17/100,IF(B16="flat",B17,0))',
+    STYLE.assumptionValue, { z: MONEY });
+  setCell("C26", "Renewal Fee / Event", STYLE.assumptionLabel);
+  setFormula("D26",
+    'IF(B20="pct_rent",B16*D20/100,IF(B20="flat",D20,0))',
     computeRenewalFee(input.rent, input.renewal_type, input.renewal_amount),
-    {z: MONEY});
+    STYLE.assumptionValue, { z: MONEY });
 
-  $.cell("A44", "Leasing MRU per door per month");
-  $.formula("B44", "B42*B22*B21/12", rev.leasing, {z: MONEY});
+  // ===== REVENUE BREAKDOWN (row 28 header, row 29 col header, rows 30-43 lines, row 44 total) =====
+  setCell("A28", "REVENUE BREAKDOWN  (Atlas-keep, per door per month)", STYLE.sectionHeader);
+  setCell("B28", "", STYLE.sectionHeader);
+  setCell("C28", "", STYLE.sectionHeader);
+  setCell("D28", "", STYLE.sectionHeader);
 
-  $.cell("A45", "Renewal MRU per door per month");
-  $.formula("B45", "B43*B23*B21/12", rev.renewal, {z: MONEY});
+  setCell("A29", "Component", STYLE.tableColHeader);
+  setCell("B29", "", STYLE.tableColHeader);
+  setCell("C29", "", STYLE.tableColHeader);
+  setCell("D29", "$ / door / mo", STYLE.tableColHeaderRight);
 
-  $.cell("A46", "Tenant fees subtotal (pre-ramp)");
-  $.formula("B46", "SUM(B27:B37)", tenantPreRamp, {z: MONEY});
+  // Row 30: Net management fee (formula)
+  setCell("A30", "Net management fee (after vacancy & mgmt ramp)", STYLE.tableRowLabel);
+  setCell("B30", "", STYLE.tableRowLabel);
+  setCell("C30", "", STYLE.tableRowLabel);
+  setFormula("D30", "B16*D16*B25*B23",
+    input.rent * input.mgmt_fee * (1 - 0.5/30.5) * ramp.mgmt,
+    STYLE.tableRowValue);
 
-  $.cell("A47", "Tenant fees per door per month (ramp-adjusted)");
-  $.formula("B47", "B46*B21", rev.tenant_total, {z: MONEY});
+  // Row 31: Leasing fee (formula)
+  const leasingLabel = `Leasing fee  (${(events.leasing*ramp.tenant).toFixed(2)} events/door/yr × ${fmtMoneyWhole(computeLeasingFee(input.rent, input.leasing_type, input.leasing_amount))})`;
+  setCell("A31", leasingLabel, STYLE.tableRowLabel);
+  setCell("B31", "", STYLE.tableRowLabel);
+  setCell("C31", "", STYLE.tableRowLabel);
+  setFormula("D31", "B26*D23*B24/12", rev.leasing, STYLE.tableRowValue);
 
-  $.cell("A48", "ATLAS MRU PER DOOR PER MONTH");
-  $.formula("B48", "B41+B44+B45+B47", rev.atlas_wallet, {z: MONEY});
+  // Row 32: Renewal fee
+  const renewalLabel = `Renewal fee  (${(events.renewal*ramp.tenant).toFixed(2)} events/door/yr × ${fmtMoneyWhole(computeRenewalFee(input.rent, input.renewal_type, input.renewal_amount))})`;
+  setCell("A32", renewalLabel, STYLE.tableRowLabel);
+  setCell("B32", "", STYLE.tableRowLabel);
+  setCell("C32", "", STYLE.tableRowLabel);
+  setFormula("D32", "D26*D24*B24/12", rev.renewal, STYLE.tableRowValue);
 
-  // Cost & contribution
-  $.cell("A50", "COST & CONTRIBUTION");
-  $.cell("A51", "Cost-to-serve per door per month (flat)");
-  $.cell("B51", cost.total, {z: MONEY});
-
-  $.cell("A52", "Contribution per door per month");
-  $.formula("B52", "B48-B51", contribution, {z: MONEY});
-
-  $.cell("A53", "Annual contribution per door");
-  $.formula("B53", "B52*12", contribution * 12, {z: MONEY_WHOLE});
-
-  $.cell("A54", "5-yr lifetime contribution per door (retention-adjusted)");
-  $.cell("B54", lifetime, {z: MONEY_WHOLE});
-
-  $.cell("A55", "Breakeven management fee %");
-  $.cell("B55", breakeven !== null ? breakeven : 0, {z: PCT});
-
-  // Notes
-  $.cell("A57", "NOTES");
-  $.cell("A58", "Live formulas: Atlas MRU, Contribution, and Annual Contribution recalculate when you edit Property Inputs or Leasing & Renewal Terms.");
-  $.cell("A59", "Static at export time: Mgmt/tenant ramp, leasing/renewal event frequencies, and tenant fee line items reflect the segment selected at export. Changing State or Asset Type in Excel will NOT re-pull these values.");
-  $.cell("A60", "Lifetime and Breakeven are computed at export time and shown as values, not formulas.");
-  $.cell("A61", "To refresh empirical assumptions, change inputs in the web calculator and re-export.");
-
-  sheet["!ref"] = "A1:B61";
-  sheet["!cols"] = [{wch: 58}, {wch: 24}];
-  sheet["!merges"] = [
-    {s:{r:0,c:0}, e:{r:0,c:1}},  // A1:B1 title
+  // Rows 33-43: Tenant fee line items (ramp-adjusted to match web app display)
+  const feeRows = [
+    ["Late fees",                          rev.tenant_fees.late],
+    ["NSF",                                rev.tenant_fees.nsf],
+    ["Posting",                            rev.tenant_fees.posting],
+    ["Application + inspection",           rev.tenant_fees.app_inspect],
+    ["Utility billing",                    rev.tenant_fees.utility_billing],
+    ["Lease break",                        rev.tenant_fees.lease_break],
+    ["Lease modification",                 rev.tenant_fees.lease_mod],
+    ["Termination",                        rev.tenant_fees.termination],
+    ["Admin (Atlas-keep)",                 rev.tenant_fees.admin_keep],
+    ["Pet non-refundable (Atlas share)",   rev.tenant_fees.pet_atlas],
+    ["RBP (net of expense)",               rev.tenant_fees.rbp_net],
   ];
+  feeRows.forEach((r, i) => {
+    const row = 33 + i;
+    setCell(`A${row}`, r[0],  STYLE.tableRowLabel);
+    setCell(`B${row}`, "",    STYLE.tableRowLabel);
+    setCell(`C${row}`, "",    STYLE.tableRowLabel);
+    setCell(`D${row}`, r[1] || 0, STYLE.tableRowValue);
+  });
+
+  // Row 44: TOTAL ATLAS MRU
+  setCell("A44", "TOTAL ATLAS MRU", STYLE.tableTotalLabel);
+  setCell("B44", "",                STYLE.tableTotalLabel);
+  setCell("C44", "",                STYLE.tableTotalLabel);
+  setFormula("D44", `D30+D31+D32+SUM(D33:D43)`, rev.atlas_wallet, STYLE.tableTotalValue);
+
+  // ===== COST & CONTRIBUTION (row 46 header, rows 47-51 fields) =====
+  setCell("A46", "COST & CONTRIBUTION", STYLE.sectionHeader);
+  setCell("B46", "", STYLE.sectionHeader);
+  setCell("C46", "", STYLE.sectionHeader);
+  setCell("D46", "", STYLE.sectionHeader);
+
+  setCell("A47", "Cost-to-Serve (flat assumption)", STYLE.tableRowLabel);
+  setCell("B47", "", STYLE.tableRowLabel);
+  setCell("C47", "", STYLE.tableRowLabel);
+  setCell("D47", cost.total, STYLE.tableRowValue);
+
+  setCell("A48", "Contribution per door per month", STYLE.tableRowLabel);
+  setCell("B48", "", STYLE.tableRowLabel);
+  setCell("C48", "", STYLE.tableRowLabel);
+  setFormula("D48", "D44-D47", contribution, STYLE.contribValue(contribution >= 0));
+
+  setCell("A49", "Annual contribution per door", STYLE.tableRowLabel);
+  setCell("B49", "", STYLE.tableRowLabel);
+  setCell("C49", "", STYLE.tableRowLabel);
+  setFormula("D49", "D48*12", contribution * 12, { ...STYLE.tableRowValue, numFmt: MONEY_WHOLE });
+
+  setCell("A50", "5-yr lifetime contribution per door (retention-adjusted)", STYLE.tableRowLabel);
+  setCell("B50", "", STYLE.tableRowLabel);
+  setCell("C50", "", STYLE.tableRowLabel);
+  setCell("D50", lifetime, { ...STYLE.tableRowValue, numFmt: MONEY_WHOLE });
+
+  setCell("A51", "Breakeven management fee", STYLE.tableTotalLabel);
+  setCell("B51", "", STYLE.tableTotalLabel);
+  setCell("C51", "", STYLE.tableTotalLabel);
+  setCell("D51", breakeven !== null ? breakeven : 0, { ...STYLE.tableTotalValue, numFmt: PCT });
+
+  // ===== METHODOLOGY NOTES (row 53 header, rows 54-58 body) =====
+  setCell("A53", "METHODOLOGY NOTES", STYLE.notesHeader);
+  const notes = [
+    "Yellow cells are user inputs. Editing them recalculates the formulas in the Revenue Breakdown and Cost & Contribution sections.",
+    "Gray cells are empirical assumptions resolved at export time from Snowflake TTM bill data. Changing State or Asset Type in the spreadsheet will not re-pull these values.",
+    "Tenant fee line items show the ramp-adjusted Atlas-keep amounts that match the web calculator. They are static at export.",
+    "Lifetime contribution and Breakeven management fee are computed at export time and shown as values, not formulas.",
+    "To refresh segment-specific assumptions, re-run the calculation in the web app and re-export.",
+  ];
+  notes.forEach((n, i) => {
+    const row = 54 + i;
+    setCell(`A${row}`, "•  " + n, STYLE.notesBody);
+    setCell(`B${row}`, "", STYLE.notesBody);
+    setCell(`C${row}`, "", STYLE.notesBody);
+    setCell(`D${row}`, "", STYLE.notesBody);
+  });
+
+  // Sheet metadata
+  sheet["!ref"] = "A1:D58";
+  sheet["!cols"] = [
+    { wch: 30 }, // A
+    { wch: 22 }, // B
+    { wch: 22 }, // C
+    { wch: 22 }, // D
+  ];
+  sheet["!rows"] = [];
+  sheet["!rows"][0] = { hpt: 36 };  // title bar
+  sheet["!rows"][1] = { hpt: 16 };  // subtitle
+  sheet["!rows"][3] = { hpt: 24 };  // address
+  sheet["!rows"][6] = { hpt: 36 };  // verdict
+  sheet["!rows"][8] = { hpt: 18 };  // kpi label
+  sheet["!rows"][9] = { hpt: 30 };  // kpi value
+  sheet["!rows"][10] = { hpt: 14 }; // kpi sub
+  // Notes rows wider
+  for (let i = 53; i <= 58; i++) sheet["!rows"][i] = { hpt: 24 };
+
+  sheet["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },  // A1:D1 title
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },  // A2:D2 subtitle
+    { s: { r: 3, c: 0 }, e: { r: 3, c: 3 } },  // A4:D4 address
+    { s: { r: 4, c: 0 }, e: { r: 4, c: 3 } },  // A5:D5 summary
+    { s: { r: 6, c: 0 }, e: { r: 6, c: 3 } },  // A7:D7 verdict
+    { s: { r: 12, c: 0 }, e: { r: 12, c: 3 } }, // A13:D13 prop inputs header
+    { s: { r: 17, c: 0 }, e: { r: 17, c: 3 } }, // A18:D18 leasing header
+    { s: { r: 21, c: 0 }, e: { r: 21, c: 3 } }, // A22:D22 assumptions header
+    { s: { r: 27, c: 0 }, e: { r: 27, c: 3 } }, // A28:D28 revenue header
+    { s: { r: 28, c: 0 }, e: { r: 28, c: 2 } }, // A29:C29 component col header
+    { s: { r: 29, c: 0 }, e: { r: 29, c: 2 } }, // A30:C30 net mgmt fee
+    { s: { r: 30, c: 0 }, e: { r: 30, c: 2 } }, // leasing
+    { s: { r: 31, c: 0 }, e: { r: 31, c: 2 } }, // renewal
+    // Tenant fee rows 33-43 (rows 32-42 in 0-indexed)
+    ...Array.from({ length: 11 }, (_, i) => ({ s: { r: 32 + i, c: 0 }, e: { r: 32 + i, c: 2 } })),
+    { s: { r: 43, c: 0 }, e: { r: 43, c: 2 } }, // total row
+    { s: { r: 45, c: 0 }, e: { r: 45, c: 3 } }, // cost & contrib header
+    { s: { r: 46, c: 0 }, e: { r: 46, c: 2 } }, // cost
+    { s: { r: 47, c: 0 }, e: { r: 47, c: 2 } }, // contrib
+    { s: { r: 48, c: 0 }, e: { r: 48, c: 2 } }, // annual
+    { s: { r: 49, c: 0 }, e: { r: 49, c: 2 } }, // lifetime
+    { s: { r: 50, c: 0 }, e: { r: 50, c: 2 } }, // breakeven
+    // Notes rows 54-58 each merged across A:D (rows 53-57 0-indexed)
+    ...Array.from({ length: 5 }, (_, i) => ({ s: { r: 53 + i, c: 0 }, e: { r: 53 + i, c: 3 } })),
+  ];
+
+  // Print setup
+  sheet["!pageSetup"] = { orientation: "portrait", paperSize: 1, fitToWidth: 1, fitToHeight: 1 };
+  sheet["!margins"] = { left: 0.5, right: 0.5, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 };
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet, "MRU Estimate");
 
-  // Filename based on address + date
+  // Filename
   const namePart = [input.addr_street, input.addr_city]
     .filter(Boolean).join("_").replace(/[^a-zA-Z0-9_-]/g, "_") || "property";
   const filename = `Atlas_MRU_${namePart}_${new Date().toISOString().slice(0,10)}.xlsx`;
