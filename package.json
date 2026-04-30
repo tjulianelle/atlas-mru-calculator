@@ -1,0 +1,20 @@
+{
+  "name": "atlas-mru-calculator",
+  "version": "1.0.0",
+  "description": "Atlas Real Estate MRU v2 Calculator - 3rd Party Property Management revenue prediction tool",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "express-basic-auth": "^1.2.1"
+  },
+  "private": true,
+  "license": "UNLICENSED",
+  "author": "Atlas Real Estate"
+}

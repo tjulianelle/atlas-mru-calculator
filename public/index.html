@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas MRU v2 Calculator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --atlas-navy: #1F3A5F;
+    --atlas-blue: #2E5984;
+    --atlas-accent: #C8A063;
+    --atlas-light: #F5F6F8;
+    --atlas-mid: #E1E5EB;
+    --atlas-dark: #2A2D31;
+    --good: #2D7A4F;
+    --bad: #B23A3A;
+    --warn: #C77B27;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    margin: 0;
+    background: var(--atlas-light);
+    color: var(--atlas-dark);
+    line-height: 1.5;
+  }
+  header {
+    background: var(--atlas-navy);
+    color: white;
+    padding: 24px 40px;
+    border-bottom: 4px solid var(--atlas-accent);
+  }
+  header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.3px; }
+  header .sub { margin-top: 4px; font-size: 13px; color: #BCC8DA; }
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 40px;
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 32px;
+  }
+  .card {
+    background: white;
+    border-radius: 8px;
+    padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  h2 {
+    margin: 0 0 16px 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--atlas-navy);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--atlas-mid);
+    padding-bottom: 10px;
+  }
+  h3 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--atlas-blue);
+    margin: 20px 0 8px 0;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--atlas-dark);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  input, select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--atlas-mid);
+    border-radius: 4px;
+    font-size: 14px;
+    background: white;
+    margin-bottom: 14px;
+    font-family: inherit;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--atlas-blue);
+    box-shadow: 0 0 0 2px rgba(46,89,132,0.15);
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button {
+    background: var(--atlas-navy);
+    color: white;
+    border: none;
+    padding: 11px 18px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 4px;
+    letter-spacing: 0.3px;
+    transition: background 0.15s;
+  }
+  button:hover { background: var(--atlas-blue); }
+  button.secondary {
+    background: white;
+    color: var(--atlas-navy);
+    border: 1px solid var(--atlas-navy);
+    margin-top: 8px;
+  }
+  button.secondary:hover { background: var(--atlas-light); }
+  .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+  .presets button {
+    margin-top: 0;
+    padding: 7px 8px;
+    font-size: 11px;
+    background: var(--atlas-mid);
+    color: var(--atlas-dark);
+  }
+  .presets button:hover { background: #D2D7DF; }
+
+  .verdict {
+    padding: 16px 20px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    border-left: 4px solid;
+  }
+  .verdict.good { background: #E5F2EC; border-color: var(--good); color: #1F5736; }
+  .verdict.bad { background: #F7E5E5; border-color: var(--bad); color: #802929; }
+  .verdict.warn { background: #FBF1E2; border-color: var(--warn); color: #84541C; }
+  .verdict-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+  .verdict-detail { font-size: 13px; }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .kpi {
+    background: var(--atlas-light);
+    padding: 14px;
+    border-radius: 6px;
+    border-top: 3px solid var(--atlas-blue);
+  }
+  .kpi-label { font-size: 10.5px; text-transform: uppercase; color: #666; letter-spacing: 0.4px; font-weight: 600; }
+  .kpi-value { font-size: 22px; font-weight: 700; color: var(--atlas-navy); margin-top: 6px; }
+  .kpi-sub { font-size: 11px; color: #888; margin-top: 2px; }
+  .kpi.contribution-pos { border-color: var(--good); }
+  .kpi.contribution-pos .kpi-value { color: var(--good); }
+  .kpi.contribution-neg { border-color: var(--bad); }
+  .kpi.contribution-neg .kpi-value { color: var(--bad); }
+
+  .breakdown {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  table th, table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--atlas-mid);
+  }
+  table th {
+    background: var(--atlas-light);
+    font-weight: 600;
+    color: var(--atlas-navy);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+  table td.right { text-align: right; font-variant-numeric: tabular-nums; }
+  table tr.total td {
+    border-top: 2px solid var(--atlas-navy);
+    font-weight: 700;
+    background: var(--atlas-light);
+  }
+  .chart-wrap { margin-top: 20px; height: 280px; position: relative; }
+
+  footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 11px;
+    color: #888;
+    border-top: 1px solid var(--atlas-mid);
+    margin-top: 32px;
+  }
+  details { margin-top: 16px; font-size: 13px; color: #666; }
+  details summary { cursor: pointer; font-weight: 600; color: var(--atlas-blue); }
+  details p { margin: 8px 0; }
+  @media (max-width: 900px) {
+    .container { grid-template-columns: 1fr; }
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .breakdown { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Atlas MRU v2 Calculator</h1>
+  <div class="sub">3rd Party Property Management — Atlas-Keep Methodology — TTM April 2026</div>
+</header>
+
+<div class="container">
+
+  <!-- INPUT PANEL -->
+  <div class="card">
+    <h2>Property Inputs</h2>
+
+    <label>Asset Type</label>
+    <select id="asset_type">
+      <option value="Single-Family">Single-Family</option>
+      <option value="Multi-Family">Multi-Family</option>
+    </select>
+
+    <div class="row">
+      <div>
+        <label>State</label>
+        <select id="state">
+          <option value="CO">Colorado</option>
+          <option value="AZ">Arizona</option>
+          <option value="UT">Utah</option>
+          <option value="ID">Idaho</option>
+          <option value="MO">Missouri</option>
+          <option value="KS">Kansas</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div>
+        <label>Doors</label>
+        <input type="number" id="doors" value="1" min="1" />
+      </div>
+    </div>
+
+    <label>Rent per Door (monthly)</label>
+    <input type="number" id="rent" value="2500" min="100" step="50" />
+
+    <div class="row">
+      <div>
+        <label>Mgmt Fee %</label>
+        <input type="number" id="mgmt_fee" value="8.0" min="0" max="20" step="0.1" />
+      </div>
+      <div>
+        <label>Tenure (months)</label>
+        <input type="number" id="tenure" value="24" min="0" />
+      </div>
+    </div>
+
+    <h3>Leasing &amp; Renewal Terms</h3>
+    <div class="row">
+      <div>
+        <label>Leasing Fee Type</label>
+        <select id="leasing_type">
+          <option value="pct_first_month">% of First Month Rent</option>
+          <option value="flat">Flat Dollar Amount</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+      <div>
+        <label id="leasing_amt_label">Leasing Fee (%)</label>
+        <input type="number" id="leasing_amount" value="50" min="0" step="1" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Renewal Fee Type</label>
+        <select id="renewal_type">
+          <option value="flat">Flat Dollar Amount</option>
+          <option value="pct_rent">% of Monthly Rent</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+      <div>
+        <label id="renewal_amt_label">Renewal Fee ($)</label>
+        <input type="number" id="renewal_amount" value="250" min="0" step="10" />
+      </div>
+    </div>
+
+    <button onclick="calculate()">Calculate</button>
+    <button class="secondary" onclick="findBreakeven()">Solve Breakeven Fee</button>
+
+    <h3>Quick Presets</h3>
+    <div class="presets">
+      <button onclick="loadPreset('co_sfr_typical')">CO SFR Typical</button>
+      <button onclick="loadPreset('co_mf_typical')">CO MF Typical</button>
+      <button onclick="loadPreset('co_mf_new')">New CO MF (Ramp)</button>
+      <button onclick="loadPreset('az_sfr')">AZ SFR</button>
+      <button onclick="loadPreset('co_mf_low_rent')">Low-Rent CO MF</button>
+      <button onclick="loadPreset('high_end_sfr')">High-End CO SFR</button>
+    </div>
+
+    <details>
+      <summary>About this calculator</summary>
+      <p>Predicts Atlas-keep revenue per door per month using empirical assumption tables from the trailing twelve months of Snowflake data (967 properties, 2,872 doors).</p>
+      <p>Cost-to-serve is a placeholder. Replace with finance-owned segmented allocation before using to underwrite new business.</p>
+      <p>AHS revenue, brokerage attach, and owner-expansion revenue are out of scope for v1.</p>
+    </details>
+  </div>
+
+  <!-- RESULTS PANEL -->
+  <div>
+    <div class="card">
+      <h2>Results</h2>
+      <div id="verdict" class="verdict good">
+        <div class="verdict-title">Run the calculator to see results.</div>
+        <div class="verdict-detail">Adjust inputs on the left or load a preset.</div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi">
+          <div class="kpi-label">Atlas Wallet</div>
+          <div class="kpi-value" id="kpi_wallet">$0</div>
+          <div class="kpi-sub">per door / month</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Cost to Serve</div>
+          <div class="kpi-value" id="kpi_cost">$0</div>
+          <div class="kpi-sub">fully-loaded / door</div>
+        </div>
+        <div class="kpi" id="kpi_contrib_card">
+          <div class="kpi-label">Contribution</div>
+          <div class="kpi-value" id="kpi_contrib">$0</div>
+          <div class="kpi-sub" id="kpi_contrib_yr">$0 / door / year</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Breakeven Fee</div>
+          <div class="kpi-value" id="kpi_breakeven">—</div>
+          <div class="kpi-sub">to clear $0 contribution</div>
+        </div>
+      </div>
+
+      <div class="breakdown">
+        <div>
+          <h3>Revenue Breakdown</h3>
+          <table id="rev_table">
+            <thead><tr><th>Component</th><th class="right">$ / door / mo</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div>
+          <h3>Cost Breakdown</h3>
+          <table id="cost_table">
+            <thead><tr><th>Component</th><th class="right">$ / door / mo</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <h3 style="margin-top: 24px;">Lifetime Value</h3>
+          <table>
+            <tbody>
+              <tr><td>10-yr contribution per door (retention-adjusted)</td><td class="right" id="lifetime">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: 24px;">
+      <h2>Contribution vs Management Fee</h2>
+      <div class="chart-wrap"><canvas id="feeChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  Atlas Real Estate · MRU v2 Calculator · Built April 2026 · Data refreshes from Snowflake quarterly
+</footer>
+
+<script>
+// ============================================================
+// LOOKUP TABLES (ported from lookup_tables.py)
+// ============================================================
+// Bill-side methodology: each value is what Atlas actually CLAIMS from the
+// property (not what's charged to tenants). Captures the fact that Atlas
+// only collects 30-50% of charged late fees, lease break fees, etc.
+// Posting now combines 4498 (tenant-charged) and 6159 (owner-billed).
+const TENANT_FEE_LOOKUP = {
+  "Multi-Family|AZ|1.under_1500": {late:6.06, nsf:0.108, posting:2.33, app_inspect:2.39, utility_billing:0.14, lease_break:2.06, lease_mod:0.05, termination:0.00, admin_keep:7.59, pet_atlas:0.56, rbp_net:19.56, props:69},
+  "Multi-Family|AZ|2.1500_2000": {late:5.34, nsf:0.056, posting:0.10, app_inspect:3.01, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:8.17, pet_atlas:1.44, rbp_net:23.04, props:9},
+  "Multi-Family|CO|1.under_1500": {late:2.12, nsf:0.087, posting:5.11, app_inspect:2.38, utility_billing:0.58, lease_break:1.99, lease_mod:0.11, termination:0.00, admin_keep:7.51, pet_atlas:0.01, rbp_net:13.76, props:191},
+  "Multi-Family|CO|2.1500_2000": {late:2.10, nsf:0.079, posting:4.80, app_inspect:2.59, utility_billing:0.62, lease_break:5.86, lease_mod:0.02, termination:0.00, admin_keep:8.78, pet_atlas:0.00, rbp_net:18.55, props:59},
+  "Multi-Family|CO|3.2000_2500": {late:3.37, nsf:0.117, posting:3.98, app_inspect:3.71, utility_billing:0.81, lease_break:3.66, lease_mod:0.00, termination:0.00, admin_keep:8.38, pet_atlas:0.00, rbp_net:17.89, props:25},
+  "Multi-Family|CO|4.2500_3000": {late:3.42, nsf:0.139, posting:3.25, app_inspect:2.78, utility_billing:0.17, lease_break:0.00, lease_mod:0.83, termination:0.00, admin_keep:7.05, pet_atlas:0.00, rbp_net:17.08, props:8},
+  "Multi-Family|CO|5.3000_plus": {late:0.15, nsf:0.036, posting:1.88, app_inspect:1.63, utility_billing:0.00, lease_break:12.68, lease_mod:0.00, termination:0.00, admin_keep:5.06, pet_atlas:0.00, rbp_net:9.87, props:4},
+  "Multi-Family|KS|1.under_1500": {late:4.53, nsf:0.125, posting:0.00, app_inspect:5.63, utility_billing:6.80, lease_break:0.00, lease_mod:1.25, termination:0.00, admin_keep:3.35, pet_atlas:0.00, rbp_net:20.92, props:4},
+  "Multi-Family|MO|1.under_1500": {late:3.85, nsf:0.321, posting:0.00, app_inspect:4.43, utility_billing:1.67, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:0.57, pet_atlas:0.00, rbp_net:22.61, props:19},
+  "Multi-Family|UT|1.under_1500": {late:4.02, nsf:0.00, posting:2.00, app_inspect:3.38, utility_billing:0.14, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:4.38, pet_atlas:0.00, rbp_net:24.31, props:7},
+  "Multi-Family|UT|2.1500_2000": {late:0.03, nsf:0.00, posting:0.00, app_inspect:3.75, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:7.70, pet_atlas:0.00, rbp_net:29.10, props:3},
+  "Single-Family|AZ|1.under_1500": {late:6.85, nsf:0.162, posting:3.01, app_inspect:2.96, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:10.45, pet_atlas:1.39, rbp_net:14.15, props:18},
+  "Single-Family|AZ|2.1500_2000": {late:11.54, nsf:0.00, posting:1.77, app_inspect:3.73, utility_billing:0.05, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:14.51, pet_atlas:0.40, rbp_net:20.24, props:31},
+  "Single-Family|AZ|3.2000_2500": {late:7.31, nsf:0.00, posting:2.00, app_inspect:7.06, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:17.08, pet_atlas:1.67, rbp_net:17.64, props:15},
+  "Single-Family|AZ|4.2500_3000": {late:1.39, nsf:0.00, posting:1.50, app_inspect:10.52, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:9.93, pet_atlas:0.00, rbp_net:23.98, props:10},
+  "Single-Family|CO|1.under_1500": {late:2.50, nsf:0.029, posting:4.60, app_inspect:1.85, utility_billing:0.09, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:8.17, pet_atlas:0.00, rbp_net:14.23, props:29},
+  "Single-Family|CO|2.1500_2000": {late:2.84, nsf:0.056, posting:3.83, app_inspect:2.82, utility_billing:0.44, lease_break:1.68, lease_mod:0.00, termination:0.00, admin_keep:8.67, pet_atlas:0.00, rbp_net:20.41, props:90},
+  "Single-Family|CO|3.2000_2500": {late:3.85, nsf:0.113, posting:3.84, app_inspect:3.21, utility_billing:0.59, lease_break:4.46, lease_mod:0.00, termination:0.00, admin_keep:8.84, pet_atlas:0.00, rbp_net:18.75, props:129},
+  "Single-Family|CO|4.2500_3000": {late:2.99, nsf:0.099, posting:4.27, app_inspect:2.83, utility_billing:0.34, lease_break:1.60, lease_mod:0.00, termination:0.00, admin_keep:8.00, pet_atlas:0.00, rbp_net:19.97, props:130},
+  "Single-Family|CO|5.3000_plus": {late:4.30, nsf:0.088, posting:2.34, app_inspect:5.20, utility_billing:0.35, lease_break:4.00, lease_mod:0.08, termination:0.00, admin_keep:7.33, pet_atlas:0.00, rbp_net:20.21, props:76},
+  "Single-Family|ID|3.2000_2500": {late:4.08, nsf:0.00, posting:0.00, app_inspect:0.00, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:5.62, pet_atlas:0.00, rbp_net:13.97, props:7},
+  "Single-Family|MO|1.under_1500": {late:0.00, nsf:0.00, posting:0.00, app_inspect:0.00, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:0.00, pet_atlas:0.00, rbp_net:8.72, props:4},
+  "Single-Family|MO|2.1500_2000": {late:5.57, nsf:0.781, posting:0.00, app_inspect:0.94, utility_billing:0.00, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:1.23, pet_atlas:0.00, rbp_net:29.48, props:8},
+  "Single-Family|UT|3.2000_2500": {late:0.44, nsf:0.00, posting:0.63, app_inspect:14.38, utility_billing:0.14, lease_break:0.00, lease_mod:0.00, termination:0.00, admin_keep:4.94, pet_atlas:0.00, rbp_net:31.79, props:6},
+};
+
+// Portfolio averages, used as fallback for thin segments (props < 10)
+const TENANT_FEE_DEFAULT = {
+  "Multi-Family": {late:2.64, nsf:0.10, posting:4.38, app_inspect:2.51, utility_billing:0.50, lease_break:2.39, lease_mod:0.10, termination:0.00, admin_keep:7.32, pet_atlas:0.05, rbp_net:15.36},
+  "Single-Family": {late:3.96, nsf:0.10, posting:3.29, app_inspect:3.49, utility_billing:0.40, lease_break:2.19, lease_mod:0.00, termination:0.00, admin_keep:8.69, pet_atlas:0.05, rbp_net:19.40},
+};
+
+// Empirical leasing & renewal event frequencies (events per door per year)
+// Pulled from FACT_BILL_DETAIL TTM data. These replace v1's assumption that
+// every property has a leasing event every 30.5 months. Real frequencies are
+// materially lower, especially for MF where tenants stay longer.
+const LEASING_EVENTS_LOOKUP = {
+  // asset_type|rent_band: events per door per year
+  "Multi-Family|1.under_1500":  {leasing: 0.189, renewal: 0.264, props: 291},
+  "Multi-Family|2.1500_2000":   {leasing: 0.221, renewal: 0.343, props: 73},
+  "Multi-Family|3.2000_2500":   {leasing: 0.186, renewal: 0.336, props: 25},
+  "Multi-Family|4.2500_3000":   {leasing: 0.277, renewal: 0.255, props: 8},
+  "Multi-Family|5.3000_plus":   {leasing: 0.220, renewal: 0.300, props: 5},  // estimated, thin sample
+  "Single-Family|1.under_1500": {leasing: 0.216, renewal: 0.627, props: 51},
+  "Single-Family|2.1500_2000":  {leasing: 0.331, renewal: 0.507, props: 134},
+  "Single-Family|3.2000_2500":  {leasing: 0.296, renewal: 0.537, props: 159},
+  "Single-Family|4.2500_3000":  {leasing: 0.472, renewal: 0.465, props: 143},
+  "Single-Family|5.3000_plus":  {leasing: 0.544, renewal: 0.354, props: 79},
+};
+
+// Defaults when a segment has insufficient data
+const LEASING_EVENTS_DEFAULT = {
+  "Multi-Family":  {leasing: 0.21, renewal: 0.30},
+  "Single-Family": {leasing: 0.36, renewal: 0.50},
+};
+
+const TENURE_RAMP = {
+  "Multi-Family|under_12_months": {mgmt:0.49, tenant:0.46},
+  "Multi-Family|12_to_24_months": {mgmt:0.65, tenant:0.86},
+  "Multi-Family|24_to_60_months": {mgmt:0.97, tenant:1.00},
+  "Multi-Family|60_plus_months":  {mgmt:1.00, tenant:0.92},
+  "Single-Family|under_12_months": {mgmt:0.74, tenant:0.43},
+  "Single-Family|12_to_24_months": {mgmt:0.94, tenant:1.00},
+  "Single-Family|24_to_60_months": {mgmt:1.00, tenant:0.86},
+  "Single-Family|60_plus_months":  {mgmt:0.87, tenant:0.70},
+};
+
+const RETENTION_HAZARD = {
+  "Multi-Family|0": 0.13, "Multi-Family|1": 0.11, "Multi-Family|2": 0.10,
+  "Multi-Family|3": 0.08, "Multi-Family|4": 0.07, "Multi-Family|5": 0.05,
+  "Single-Family|0": 0.15, "Single-Family|1": 0.10, "Single-Family|2": 0.10,
+  "Single-Family|3": 0.07, "Single-Family|4": 0.06, "Single-Family|5": 0.04,
+};
+
+const COST_PLACEHOLDER = {
+  "Single-Family|1_door":  {ops:110, overhead:60, total:170},
+  "Multi-Family|2_to_4":   {ops:95,  overhead:50, total:145},
+  "Multi-Family|5_to_10":  {ops:75,  overhead:40, total:115},
+  "Multi-Family|11_plus":  {ops:60,  overhead:35, total:95},
+};
+
+// ============================================================
+// HELPERS
+// ============================================================
+function rentBand(r) {
+  if (r < 1500) return "1.under_1500";
+  if (r < 2000) return "2.1500_2000";
+  if (r < 2500) return "3.2000_2500";
+  if (r < 3000) return "4.2500_3000";
+  return "5.3000_plus";
+}
+function tenureBand(m) {
+  if (m < 12) return "under_12_months";
+  if (m < 24) return "12_to_24_months";
+  if (m < 60) return "24_to_60_months";
+  return "60_plus_months";
+}
+function doorsBand(d) {
+  if (d === 1) return "1_door";
+  if (d <= 4) return "2_to_4";
+  if (d <= 10) return "5_to_10";
+  return "11_plus";
+}
+function fmtMoney(n) {
+  return "$" + n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtMoneyWhole(n) {
+  return "$" + Math.round(n).toLocaleString("en-US");
+}
+
+// ============================================================
+// CORE CALCULATION
+// ============================================================
+function computeLeasingFee(rent, type, amount) {
+  // Returns dollar amount per leasing event
+  if (type === "none") return 0;
+  if (type === "pct_first_month") return rent * (amount / 100);
+  if (type === "flat") return amount;
+  return 0;
+}
+
+function computeRenewalFee(rent, type, amount) {
+  if (type === "none") return 0;
+  if (type === "pct_rent") return rent * (amount / 100);
+  if (type === "flat") return amount;
+  return 0;
+}
+
+function predictRevenue(input) {
+  const {asset_type, state, doors, rent, mgmt_fee, tenure,
+         leasing_type, leasing_amount, renewal_type, renewal_amount} = input;
+  const tBand = tenureBand(tenure);
+  const ramp = TENURE_RAMP[asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+
+  // Net management fee per door per month
+  const vacancyFactor = 1 - (0.5 / 30.5);
+  const mgmtFee = rent * mgmt_fee * vacancyFactor * ramp.mgmt;
+
+  // Leasing & renewal: empirical event frequency x property-specific fee
+  const rBand = rentBand(rent);
+  const eventsKey = asset_type + "|" + rBand;
+  const events = LEASING_EVENTS_LOOKUP[eventsKey] || LEASING_EVENTS_DEFAULT[asset_type];
+
+  const leasingFeePerEvent = computeLeasingFee(rent, leasing_type, leasing_amount);
+  const renewalFeePerEvent = computeRenewalFee(rent, renewal_type, renewal_amount);
+  // Apply tenant-side ramp factor (newer properties have fewer realized events)
+  const leasingEventsEff = events.leasing * ramp.tenant;
+  const renewalEventsEff = events.renewal * ramp.tenant;
+  const leasingMRU = leasingFeePerEvent * leasingEventsEff / 12;
+  const renewalMRU = renewalFeePerEvent * renewalEventsEff / 12;
+
+  // Tenant-side fees from lookup
+  const segKey = asset_type + "|" + state + "|" + rBand;
+  let segment = TENANT_FEE_LOOKUP[segKey];
+  if (!segment || segment.props < 10) {
+    segment = TENANT_FEE_DEFAULT[asset_type];
+  }
+
+  const tenantFees = {};
+  let tenantTotal = 0;
+  const keys = ["late","nsf","posting","app_inspect","utility_billing","lease_break","lease_mod","termination","admin_keep","pet_atlas","rbp_net"];
+  for (const k of keys) {
+    const v = (segment[k] || 0) * ramp.tenant;
+    tenantFees[k] = v;
+    tenantTotal += v;
+  }
+
+  return {
+    mgmt: mgmtFee,
+    leasing: leasingMRU,
+    renewal: renewalMRU,
+    leasing_renewal: leasingMRU + renewalMRU,
+    leasing_events_per_year: leasingEventsEff,
+    renewal_events_per_year: renewalEventsEff,
+    leasing_fee_per_event: leasingFeePerEvent,
+    renewal_fee_per_event: renewalFeePerEvent,
+    tenant_fees: tenantFees,
+    tenant_total: tenantTotal,
+    atlas_wallet: mgmtFee + leasingMRU + renewalMRU + tenantTotal,
+  };
+}
+
+function predictCost(input) {
+  const band = doorsBand(input.doors);
+  const c = COST_PLACEHOLDER[input.asset_type + "|" + band];
+  if (c) return c;
+  // Fallback: nearest match
+  return COST_PLACEHOLDER["Multi-Family|5_to_10"];
+}
+
+function lifetimeContribution(monthly, asset_type, startTenureMo) {
+  let total = 0;
+  let survival = 1.0;
+  for (let yr = 0; yr < 10; yr++) {
+    const effYr = Math.min(Math.floor(startTenureMo / 12) + yr, 5);
+    const hazard = RETENTION_HAZARD[asset_type + "|" + effYr] || 0.05;
+    survival *= (1 - hazard);
+    total += monthly * 12 * survival;
+  }
+  return total;
+}
+
+function solveBreakeven(input, target = 0) {
+  const cost = predictCost(input);
+  for (let bps = 0; bps <= 2000; bps += 10) {
+    const fee = bps / 10000;
+    const rev = predictRevenue({...input, mgmt_fee: fee});
+    const contribution = rev.atlas_wallet - cost.total;
+    if (contribution >= target) return fee;
+  }
+  return null;
+}
+
+// ============================================================
+// UI
+// ============================================================
+function readInputs() {
+  return {
+    asset_type: document.getElementById("asset_type").value,
+    state: document.getElementById("state").value,
+    doors: parseInt(document.getElementById("doors").value) || 1,
+    rent: parseFloat(document.getElementById("rent").value) || 0,
+    mgmt_fee: (parseFloat(document.getElementById("mgmt_fee").value) || 0) / 100,
+    tenure: parseInt(document.getElementById("tenure").value) || 0,
+    leasing_type: document.getElementById("leasing_type").value,
+    leasing_amount: parseFloat(document.getElementById("leasing_amount").value) || 0,
+    renewal_type: document.getElementById("renewal_type").value,
+    renewal_amount: parseFloat(document.getElementById("renewal_amount").value) || 0,
+  };
+}
+
+function syncFeeLabels() {
+  const lt = document.getElementById("leasing_type").value;
+  const rt = document.getElementById("renewal_type").value;
+  document.getElementById("leasing_amt_label").textContent =
+    lt === "pct_first_month" ? "Leasing Fee (% of 1st mo rent)" :
+    lt === "flat" ? "Leasing Fee ($)" : "—";
+  document.getElementById("renewal_amt_label").textContent =
+    rt === "pct_rent" ? "Renewal Fee (% of rent)" :
+    rt === "flat" ? "Renewal Fee ($)" : "—";
+  document.getElementById("leasing_amount").disabled = (lt === "none");
+  document.getElementById("renewal_amount").disabled = (rt === "none");
+}
+
+let chartInstance = null;
+
+function calculate() {
+  const input = readInputs();
+  const rev = predictRevenue(input);
+  const cost = predictCost(input);
+  const contribution = rev.atlas_wallet - cost.total;
+  const annual = contribution * 12;
+  const breakeven = solveBreakeven(input);
+  const lifetime = lifetimeContribution(contribution, input.asset_type, input.tenure);
+
+  // KPIs
+  document.getElementById("kpi_wallet").textContent = fmtMoneyWhole(rev.atlas_wallet);
+  document.getElementById("kpi_cost").textContent = fmtMoneyWhole(cost.total);
+  document.getElementById("kpi_contrib").textContent = fmtMoneyWhole(contribution);
+  document.getElementById("kpi_contrib_yr").textContent = fmtMoneyWhole(annual) + " / door / year";
+  document.getElementById("kpi_breakeven").textContent = breakeven !== null ? (breakeven * 100).toFixed(2) + "%" : "—";
+  document.getElementById("lifetime").textContent = fmtMoneyWhole(lifetime);
+
+  // Contribution card style
+  const card = document.getElementById("kpi_contrib_card");
+  card.className = "kpi " + (contribution >= 0 ? "contribution-pos" : "contribution-neg");
+
+  // Verdict
+  const verdict = document.getElementById("verdict");
+  if (contribution > 50) {
+    verdict.className = "verdict good";
+    verdict.innerHTML = `<div class="verdict-title">ACCEPT</div>
+      <div class="verdict-detail">Property generates ${fmtMoneyWhole(contribution)}/door/month at ${(input.mgmt_fee*100).toFixed(2)}% management fee.
+      Healthy margin above the cost-to-serve threshold.</div>`;
+  } else if (contribution >= 0) {
+    verdict.className = "verdict warn";
+    verdict.innerHTML = `<div class="verdict-title">MARGINAL</div>
+      <div class="verdict-detail">Property barely clears breakeven (${fmtMoneyWhole(contribution)}/door/month). Consider raising the management fee toward ${breakeven !== null ? (breakeven*100).toFixed(2) + "%" : "the breakeven"} or declining if the relationship doesn't carry strategic value.</div>`;
+  } else {
+    verdict.className = "verdict bad";
+    const action = breakeven !== null
+      ? `Raise the management fee to ${(breakeven*100).toFixed(2)}% to clear breakeven, or decline.`
+      : "Cannot break even at any reasonable fee. Decline.";
+    verdict.innerHTML = `<div class="verdict-title">DECLINE OR REPRICE</div>
+      <div class="verdict-detail">Property loses ${fmtMoneyWhole(Math.abs(contribution))}/door/month at the proposed fee. ${action}</div>`;
+  }
+
+  // Revenue table
+  const leasingLabel = `Leasing fee (${rev.leasing_events_per_year.toFixed(2)} events/door/yr × ${fmtMoneyWhole(rev.leasing_fee_per_event)})`;
+  const renewalLabel = `Renewal fee (${rev.renewal_events_per_year.toFixed(2)} events/door/yr × ${fmtMoneyWhole(rev.renewal_fee_per_event)})`;
+  const revRows = [
+    ["Net management fee (after vacancy & ramp)", rev.mgmt],
+    [leasingLabel, rev.leasing],
+    [renewalLabel, rev.renewal],
+    ["Late fees", rev.tenant_fees.late],
+    ["NSF", rev.tenant_fees.nsf],
+    ["Posting", rev.tenant_fees.posting],
+    ["Application + inspection", rev.tenant_fees.app_inspect],
+    ["Utility billing", rev.tenant_fees.utility_billing],
+    ["Lease break", rev.tenant_fees.lease_break],
+    ["Lease modification", rev.tenant_fees.lease_mod],
+    ["Termination", rev.tenant_fees.termination],
+    ["Admin (Atlas-keep)", rev.tenant_fees.admin_keep],
+    ["Pet non-refundable (Atlas share)", rev.tenant_fees.pet_atlas],
+    ["RBP (net of expense)", rev.tenant_fees.rbp_net],
+  ];
+  const revBody = document.querySelector("#rev_table tbody");
+  revBody.innerHTML = revRows
+    .filter(r => r[1] > 0.005)
+    .map(r => `<tr><td>${r[0]}</td><td class="right">${fmtMoney(r[1])}</td></tr>`)
+    .join("") + `<tr class="total"><td>Total Atlas Wallet</td><td class="right">${fmtMoney(rev.atlas_wallet)}</td></tr>`;
+
+  // Cost table
+  const costBody = document.querySelector("#cost_table tbody");
+  costBody.innerHTML = `
+    <tr><td>Operating cost</td><td class="right">${fmtMoney(cost.ops)}</td></tr>
+    <tr><td>Overhead allocation</td><td class="right">${fmtMoney(cost.overhead)}</td></tr>
+    <tr class="total"><td>Total Cost-to-Serve</td><td class="right">${fmtMoney(cost.total)}</td></tr>
+  `;
+
+  // Chart: contribution as a function of mgmt fee
+  drawFeeChart(input, cost.total);
+}
+
+function drawFeeChart(input, costTotal) {
+  const xs = [];
+  const ys = [];
+  for (let bps = 0; bps <= 1500; bps += 25) {
+    const fee = bps / 10000;
+    const rev = predictRevenue({...input, mgmt_fee: fee});
+    xs.push((fee * 100).toFixed(2));
+    ys.push(parseFloat((rev.atlas_wallet - costTotal).toFixed(2)));
+  }
+  const currentFee = (input.mgmt_fee * 100).toFixed(2);
+
+  if (chartInstance) chartInstance.destroy();
+  const ctx = document.getElementById("feeChart").getContext("2d");
+  chartInstance = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: xs,
+      datasets: [
+        {
+          label: "Contribution per door per month",
+          data: ys,
+          borderColor: "#2E5984",
+          backgroundColor: "rgba(46,89,132,0.10)",
+          fill: true,
+          tension: 0.2,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: "Current proposed fee",
+          data: ys.map((v, i) => xs[i] === currentFee ? v : null),
+          borderColor: "#C8A063",
+          backgroundColor: "#C8A063",
+          pointRadius: 6,
+          pointHoverRadius: 8,
+          showLine: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: $${c.parsed.y}/door/mo at ${c.label}%` } },
+        annotation: {}
+      },
+      scales: {
+        x: { title: { display: true, text: "Management Fee %" }, ticks: { maxTicksLimit: 10 } },
+        y: { title: { display: true, text: "Contribution / door / month" },
+             grid: { color: (ctx) => ctx.tick.value === 0 ? "#B23A3A" : "#E1E5EB" } }
+      }
+    }
+  });
+}
+
+function findBreakeven() {
+  const input = readInputs();
+  const breakeven = solveBreakeven(input);
+  if (breakeven === null) {
+    alert("Cannot break even at any management fee from 0% to 20%. The cost-to-serve exceeds the realistic revenue ceiling for this property type.");
+    return;
+  }
+  document.getElementById("mgmt_fee").value = (breakeven * 100).toFixed(2);
+  calculate();
+}
+
+const PRESETS = {
+  co_sfr_typical: {asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  co_mf_typical: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:24, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  co_mf_new: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, tenure:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+  high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, tenure:36, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"flat", renewal_amount:250},
+};
+
+function loadPreset(key) {
+  const p = PRESETS[key];
+  document.getElementById("asset_type").value = p.asset_type;
+  document.getElementById("state").value = p.state;
+  document.getElementById("doors").value = p.doors;
+  document.getElementById("rent").value = p.rent;
+  document.getElementById("mgmt_fee").value = p.mgmt_fee;
+  document.getElementById("tenure").value = p.tenure;
+  document.getElementById("leasing_type").value = p.leasing_type;
+  document.getElementById("leasing_amount").value = p.leasing_amount;
+  document.getElementById("renewal_type").value = p.renewal_type;
+  document.getElementById("renewal_amount").value = p.renewal_amount;
+  syncFeeLabels();
+  calculate();
+}
+
+// Auto-calc on input change
+["asset_type","state","doors","rent","mgmt_fee","tenure",
+ "leasing_type","leasing_amount","renewal_type","renewal_amount"].forEach(id => {
+  document.getElementById(id).addEventListener("change", () => { syncFeeLabels(); calculate(); });
+  document.getElementById(id).addEventListener("input", () => { syncFeeLabels(); calculate(); });
+});
+
+// Initial render
+syncFeeLabels();
+calculate();
+</script>
+
+</body>
+</html>
