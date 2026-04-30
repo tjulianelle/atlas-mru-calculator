@@ -1324,36 +1324,58 @@ function exportExcel() {
   setCell("C18", "", STYLE.sectionHeader);
   setCell("D18", "", STYLE.sectionHeader);
 
-  setCell("A19", "Leasing Fee Type",  STYLE.inputLabel); setCell("B19", input.leasing_type,   STYLE.inputValue);
-  setCell("C19", "Leasing Amount",    STYLE.inputLabel); setCell("D19", input.leasing_amount, STYLE.inputValueRight);
-  setCell("A20", "Renewal Fee Type",  STYLE.inputLabel); setCell("B20", input.renewal_type,   STYLE.inputValue);
-  setCell("C20", "Renewal Amount",    STYLE.inputLabel); setCell("D20", input.renewal_amount, STYLE.inputValueRight);
+  // Translate raw type codes to plain English. Formulas below match these strings.
+  const leasingTypeLabel =
+    input.leasing_type === "pct_first_month" ? "% of First Month Rent" :
+    input.leasing_type === "flat" ? "Flat Dollar Amount" : "None";
+  const renewalTypeLabel =
+    input.renewal_type === "pct_rent" ? "% of Monthly Rent" :
+    input.renewal_type === "flat" ? "Flat Dollar Amount" : "None";
 
-  // ===== EMPIRICAL ASSUMPTIONS (row 22 header, rows 23-25) =====
-  setCell("A22", "EMPIRICAL ASSUMPTIONS  (resolved at export from Snowflake TTM data)", STYLE.sectionHeader);
+  // Format the amount cell based on the type so the units make sense
+  const leasingAmountFmt =
+    input.leasing_type === "pct_first_month" ? '0"%"' :
+    input.leasing_type === "flat" ? '"$"#,##0' : "0";
+  const renewalAmountFmt =
+    input.renewal_type === "pct_rent" ? '0"%"' :
+    input.renewal_type === "flat" ? '"$"#,##0' : "0";
+  const leasingAmountLabel =
+    input.leasing_type === "pct_first_month" ? "Leasing Fee (% of 1st mo)" :
+    input.leasing_type === "flat" ? "Leasing Fee (flat $)" : "Leasing Fee";
+  const renewalAmountLabel =
+    input.renewal_type === "pct_rent" ? "Renewal Fee (% of rent)" :
+    input.renewal_type === "flat" ? "Renewal Fee (flat $)" : "Renewal Fee";
+
+  setCell("A19", "Leasing Fee Type",  STYLE.inputLabel); setCell("B19", leasingTypeLabel, STYLE.inputValue);
+  setCell("C19", leasingAmountLabel,  STYLE.inputLabel); setCell("D19", input.leasing_amount, STYLE.inputValueRight, { z: leasingAmountFmt });
+  setCell("A20", "Renewal Fee Type",  STYLE.inputLabel); setCell("B20", renewalTypeLabel, STYLE.inputValue);
+  setCell("C20", renewalAmountLabel,  STYLE.inputLabel); setCell("D20", input.renewal_amount, STYLE.inputValueRight, { z: renewalAmountFmt });
+
+  // ===== ATLAS DATA ASSUMPTIONS (row 22 header, rows 23-25) =====
+  setCell("A22", "REVENUE ASSUMPTIONS (from Atlas TTM data)", STYLE.sectionHeader);
   setCell("B22", "", STYLE.sectionHeader);
   setCell("C22", "", STYLE.sectionHeader);
   setCell("D22", "", STYLE.sectionHeader);
 
-  setCell("A23", "Mgmt Fee Ramp",      STYLE.assumptionLabel); setCell("B23", ramp.mgmt,      STYLE.assumptionValue, { z: NUM4 });
-  setCell("C23", "Leasing Events / yr", STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
-  setCell("A24", "Tenant Fee Ramp",    STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
-  setCell("C24", "Renewal Events / yr", STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
-  setCell("A25", "Vacancy Factor",     STYLE.assumptionLabel);
+  // Human-friendly segment description
+  const rentBandLabel =
+    rBand === "1.under_1500" ? "Under $1,500 rent" :
+    rBand === "2.1500_2000"  ? "$1,500 - $2,000 rent" :
+    rBand === "3.2000_2500"  ? "$2,000 - $2,500 rent" :
+    rBand === "4.2500_3000"  ? "$2,500 - $3,000 rent" :
+                               "$3,000+ rent";
+  const segmentSource = usingDefault
+    ? `Portfolio default (${input.asset_type}, thin segment)`
+    : `${input.asset_type} · ${input.state} · ${rentBandLabel}`;
+
+  setCell("A23", "Mgmt Fee Ramp",        STYLE.assumptionLabel); setCell("B23", ramp.mgmt,      STYLE.assumptionValue, { z: NUM4 });
+  setCell("C23", "Leasing Events / yr",  STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A24", "Tenant Fee Ramp",      STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
+  setCell("C24", "Renewal Events / yr",  STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
+  setCell("A25", "Vacancy Adjustment",   STYLE.assumptionLabel);
   setFormula("B25", "1-0.5/30.5", 1 - 0.5/30.5, STYLE.assumptionValue, { z: NUM4 });
-  setCell("C25", "Segment Source",     STYLE.assumptionLabel);
-  setCell("D25", usingDefault ? "Portfolio default" : segKey, STYLE.assumptionValue);
-  // Helper formula cells (leasing/renewal fee per event) — keep same row, off to the side
-  setCell("A26", "Leasing Fee / Event", STYLE.assumptionLabel);
-  setFormula("B26",
-    'IF(B19="pct_first_month",B16*D19/100,IF(B19="flat",D19,0))',
-    computeLeasingFee(input.rent, input.leasing_type, input.leasing_amount),
-    STYLE.assumptionValue, { z: MONEY });
-  setCell("C26", "Renewal Fee / Event", STYLE.assumptionLabel);
-  setFormula("D26",
-    'IF(B20="pct_rent",B16*D20/100,IF(B20="flat",D20,0))',
-    computeRenewalFee(input.rent, input.renewal_type, input.renewal_amount),
-    STYLE.assumptionValue, { z: MONEY });
+  setCell("C25", "Data Segment",         STYLE.assumptionLabel);
+  setCell("D25", segmentSource, { ...STYLE.assumptionValue, alignment: { horizontal: "left", vertical: "center", indent: 1 } });
 
   // ===== REVENUE BREAKDOWN (row 28 header, row 29 col header, rows 30-43 lines, row 44 total) =====
   setCell("A28", "REVENUE BREAKDOWN  (Atlas-keep, per door per month)", STYLE.sectionHeader);
@@ -1374,19 +1396,23 @@ function exportExcel() {
     input.rent * input.mgmt_fee * (1 - 0.5/30.5) * ramp.mgmt,
     STYLE.tableRowValue);
 
-  // Row 31: Leasing fee (formula)
+  // Row 31: Leasing fee (formula — inline IF picks % vs flat based on type cell)
   const leasingLabel = `Leasing fee  (${(events.leasing*ramp.tenant).toFixed(2)} events/door/yr × ${fmtMoneyWhole(computeLeasingFee(input.rent, input.leasing_type, input.leasing_amount))})`;
   setCell("A31", leasingLabel, STYLE.tableRowLabel);
   setCell("B31", "", STYLE.tableRowLabel);
   setCell("C31", "", STYLE.tableRowLabel);
-  setFormula("D31", "B26*D23*B24/12", rev.leasing, STYLE.tableRowValue);
+  setFormula("D31",
+    'IF(B19="% of First Month Rent",B16*D19/100,IF(B19="Flat Dollar Amount",D19,0))*D23*B24/12',
+    rev.leasing, STYLE.tableRowValue);
 
-  // Row 32: Renewal fee
+  // Row 32: Renewal fee (formula — inline IF picks % vs flat based on type cell)
   const renewalLabel = `Renewal fee  (${(events.renewal*ramp.tenant).toFixed(2)} events/door/yr × ${fmtMoneyWhole(computeRenewalFee(input.rent, input.renewal_type, input.renewal_amount))})`;
   setCell("A32", renewalLabel, STYLE.tableRowLabel);
   setCell("B32", "", STYLE.tableRowLabel);
   setCell("C32", "", STYLE.tableRowLabel);
-  setFormula("D32", "D26*D24*B24/12", rev.renewal, STYLE.tableRowValue);
+  setFormula("D32",
+    'IF(B20="% of Monthly Rent",B16*D20/100,IF(B20="Flat Dollar Amount",D20,0))*D24*B24/12',
+    rev.renewal, STYLE.tableRowValue);
 
   // Rows 33-43: Tenant fee line items (ramp-adjusted to match web app display)
   const feeRows = [
@@ -1448,13 +1474,13 @@ function exportExcel() {
   setCell("D51", breakeven !== null ? breakeven : 0, { ...STYLE.tableTotalValue, numFmt: PCT });
 
   // ===== METHODOLOGY NOTES (row 53 header, rows 54-58 body) =====
-  setCell("A53", "METHODOLOGY NOTES", STYLE.notesHeader);
+  setCell("A53", "NOTES", STYLE.notesHeader);
   const notes = [
-    "Yellow cells are user inputs. Editing them recalculates the formulas in the Revenue Breakdown and Cost & Contribution sections.",
-    "Gray cells are empirical assumptions resolved at export time from Snowflake TTM bill data. Changing State or Asset Type in the spreadsheet will not re-pull these values.",
-    "Tenant fee line items show the ramp-adjusted Atlas-keep amounts that match the web calculator. They are static at export.",
-    "Lifetime contribution and Breakeven management fee are computed at export time and shown as values, not formulas.",
-    "To refresh segment-specific assumptions, re-run the calculation in the web app and re-export.",
+    "Yellow cells are editable inputs. The Revenue Breakdown and Cost & Contribution sections recalculate when you change them.",
+    "Gray cells reflect the segment chosen at export. Editing State or Asset Type here will not re-pull data; re-run the web calculator and re-export to refresh.",
+    "Tenant fee line items show the Atlas-keep amounts after the tenure ramp is applied, matching the web calculator.",
+    "Lifetime Contribution and Breakeven Management Fee are computed at export and shown as values, not formulas.",
+    "Cost-to-Serve is a flat $150 per door per month placeholder. Replace with finance allocation when available.",
   ];
   notes.forEach((n, i) => {
     const row = 54 + i;
