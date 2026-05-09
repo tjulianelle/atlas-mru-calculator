@@ -31,9 +31,31 @@
     padding: 24px 40px;
     border-bottom: 4px solid var(--atlas-accent);
   }
-  header { text-align: center; }
+  header { text-align: center; position: relative; }
   header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.3px; }
   header .sub { margin-top: 4px; font-size: 13px; color: #BCC8DA; }
+  /* Mode toggle pill in the header */
+  .mode-toggle {
+    position: absolute; right: 40px; top: 50%; transform: translateY(-50%);
+    display: inline-flex; background: rgba(255,255,255,0.12); border-radius: 999px;
+    padding: 3px; font-size: 12px; font-weight: 600;
+  }
+  .mode-toggle button {
+    background: transparent; color: #BCC8DA; border: none;
+    padding: 6px 14px; margin: 0; width: auto; border-radius: 999px;
+    cursor: pointer; letter-spacing: 0.3px; transition: all 0.15s;
+    font-size: 12px; font-weight: 600;
+  }
+  .mode-toggle button.active { background: white; color: var(--atlas-navy); }
+  .mode-toggle button:hover:not(.active) { color: white; background: rgba(255,255,255,0.08); }
+  /* Hide underwriting-only sections in sales mode */
+  body.sales-mode .underwriting-only { display: none !important; }
+  /* Subtle hint in sales mode that more controls exist */
+  body.sales-mode .card h2:first-of-type::after {
+    content: "Sales Mode"; float: right; font-size: 10px; color: var(--atlas-blue);
+    background: var(--atlas-mid); padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
   .container {
     max-width: 1200px;
     margin: 0 auto;
@@ -137,10 +159,27 @@
 
   .kpi-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
     margin-bottom: 24px;
   }
+  /* Deal grade tile color variants */
+  .kpi.grade-A .kpi-value, .kpi.grade-B .kpi-value { color: var(--good); }
+  .kpi.grade-C .kpi-value { color: var(--warn); }
+  .kpi.grade-D .kpi-value, .kpi.grade-F .kpi-value { color: var(--bad); }
+  .kpi.grade-A { border-color: var(--good); }
+  .kpi.grade-B { border-color: var(--good); }
+  .kpi.grade-C { border-color: var(--warn); }
+  .kpi.grade-D, .kpi.grade-F { border-color: var(--bad); }
+  /* Portfolio context rows */
+  .bench-row { display:grid; grid-template-columns: 110px 1fr 90px; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--atlas-mid); }
+  .bench-row:last-child { border-bottom: none; }
+  .bench-label { font-weight: 600; color: var(--atlas-dark); font-size: 12px; }
+  .bench-bar-wrap { position: relative; height: 8px; background: var(--atlas-mid); border-radius: 4px; }
+  .bench-bar-marker { position: absolute; top: -3px; width: 14px; height: 14px; border-radius: 50%; background: var(--atlas-navy); border: 2px solid white; box-shadow: 0 0 0 1px var(--atlas-navy); transform: translateX(-50%); }
+  .bench-bar-quart { position: absolute; top: 0; height: 100%; background: var(--atlas-blue); opacity: 0.25; border-radius: 4px; }
+  .bench-value { font-variant-numeric: tabular-nums; text-align: right; color: #555; font-size: 12px; }
+  .bench-value strong { color: var(--atlas-navy); }
   .kpi {
     background: var(--atlas-light);
     padding: 14px;
@@ -200,6 +239,7 @@
   @media (max-width: 900px) {
     .container { grid-template-columns: 1fr; }
     .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .bench-row { grid-template-columns: 90px 1fr 80px; }
     .breakdown { grid-template-columns: 1fr; }
   }
 
@@ -323,6 +363,10 @@
 
 <header class="no-print">
   <h1>Atlas MRU Calculator</h1>
+  <div class="mode-toggle">
+    <button id="mode_sales" class="active" onclick="setMode('sales')">Sales</button>
+    <button id="mode_underwriting" onclick="setMode('underwriting')">Underwriting</button>
+  </div>
 </header>
 
 <!-- Print-only header populated by exportPDF() -->
@@ -426,10 +470,12 @@
       Atlas MRU is the survival-weighted average across the hold period. Year 1 revenue is lower because of the onboarding ramp; longer holds dilute that drag.
     </div>
 
-    <label>Cost to Manage per Door ($/mo)</label>
-    <input type="number" id="cost_per_door" value="150" min="0" step="5" />
-    <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
-      Fully-loaded Atlas cost per door per month. Override per deal as needed. Segmented cost-to-serve modeling is a separate workstream.
+    <div class="underwriting-only">
+      <label>Cost to Manage per Door ($/mo)</label>
+      <input type="number" id="cost_per_door" value="150" min="0" step="5" />
+      <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+        Fully-loaded Atlas cost per door per month. Override per deal as needed. Segmented cost-to-serve modeling is a separate workstream.
+      </div>
     </div>
 
     <h3>Leasing &amp; Renewal Terms</h3>
@@ -478,18 +524,20 @@
       </div>
     </div>
 
-    <div class="row">
-      <div>
-        <label>Min Mgmt Fee ($/mo per property)</label>
-        <input type="number" id="min_mgmt_fee" value="0" min="0" step="100" />
+    <div class="underwriting-only">
+      <div class="row">
+        <div>
+          <label>Min Mgmt Fee ($/mo per property)</label>
+          <input type="number" id="min_mgmt_fee" value="0" min="0" step="100" />
+        </div>
+        <div>
+          <label>Min Fee Duration (months)</label>
+          <input type="number" id="min_mgmt_duration" value="0" min="0" max="36" step="1" />
+        </div>
       </div>
-      <div>
-        <label>Min Fee Duration (months)</label>
-        <input type="number" id="min_mgmt_duration" value="0" min="0" max="36" step="1" />
+      <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+        Floor on management fee during early months when occupancy is low. Set both to zero to disable.
       </div>
-    </div>
-    <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
-      Floor on management fee during early months when occupancy is low. Set both to zero to disable.
     </div>
 
     <h3>Operating Toggles</h3>
@@ -514,10 +562,10 @@
       <option value="opt_out">Opt-out (zero RBP)</option>
     </select>
 
-    <h3 style="margin-top:18px; cursor:pointer;" onclick="toggleFeeAllocation()">
+    <h3 class="underwriting-only" style="margin-top:18px; cursor:pointer;" onclick="toggleFeeAllocation()">
       Resident Fee Allocation <span id="fee_alloc_caret" style="font-size:10px;">▼</span>
     </h3>
-    <div id="fee_alloc_panel" style="display:none; margin-bottom:14px;">
+    <div id="fee_alloc_panel" class="underwriting-only" style="display:none; margin-bottom:14px;">
       <div style="font-size:11px; color:#888; margin-bottom:8px; line-height:1.4;">
         Each resident-paid fee can be allocated to Atlas or Owner per the deal. Atlas-allocated fees count toward MRU.
       </div>
@@ -587,11 +635,21 @@
           <div class="kpi-value" id="kpi_contrib">$0</div>
           <div class="kpi-sub" id="kpi_contrib_yr">$0 / door / year</div>
         </div>
+        <div class="kpi" id="kpi_grade_card">
+          <div class="kpi-label">Deal Grade</div>
+          <div class="kpi-value" id="kpi_grade">—</div>
+          <div class="kpi-sub" id="kpi_grade_sub">contribution + cushion + tenure</div>
+        </div>
         <div class="kpi">
           <div class="kpi-label">Breakeven Fee</div>
           <div class="kpi-value" id="kpi_breakeven">—</div>
           <div class="kpi-sub">to clear $0 contribution</div>
         </div>
+      </div>
+
+      <h3 style="margin-top: 16px;">Portfolio Context</h3>
+      <div id="benchmark_panel" style="font-size:12px;">
+        <div style="color:#888; font-style:italic;">Run the calculator to see how this deal compares to the portfolio.</div>
       </div>
 
       <div class="breakdown">
@@ -712,6 +770,24 @@ const RETENTION_HAZARD = {
   "Single-Family|3": 0.07, "Single-Family|4": 0.06, "Single-Family|5": 0.04,
 };
 
+// Portfolio benchmarks: P25, median, P75 of mgmt fee %, rent per door, and
+// Atlas-keep MRU per door. Stabilized 3rd Party residential population, Tukey-
+// fenced on MRU. Used by the portfolio context display.
+const PORTFOLIO_BENCHMARKS = {
+  // segment key: "<asset_type>|<state>" or "<asset_type>" as portfolio-wide fallback
+  "Multi-Family|AZ":  {props:65,  mgmt:[7.0,8.0,8.0],   rent:[1121,1277,1448], mru:[194,236,275]},
+  "Multi-Family|CO":  {props:245, mgmt:[7.5,8.0,8.0],   rent:[1125,1353,1669], mru:[189,218,273]},
+  "Multi-Family|MO":  {props:18,  mgmt:[8.0,8.0,8.0],   rent:[1052,1111,1179], mru:[171,195,263]},
+  "Multi-Family|UT":  {props:10,  mgmt:[8.0,8.0,8.0],   rent:[1011,1056,1424], mru:[198,220,244]},
+  "Multi-Family":     {props:352, mgmt:[7.5,8.0,8.0],   rent:[1096,1313,1576], mru:[189,221,278]},
+  "Single-Family|AZ": {props:57,  mgmt:[8.0,8.0,8.0],   rent:[1554,1825,2139], mru:[216,259,308]},
+  "Single-Family|CO": {props:325, mgmt:[7.0,8.0,8.0],   rent:[1943,2375,2722], mru:[243,289,346]},
+  "Single-Family|ID": {props:10,  mgmt:[8.0,10.0,10.0], rent:[2146,2323,2490], mru:[219,252,294]},
+  "Single-Family|MO": {props:12,  mgmt:[8.0,8.0,8.0],   rent:[1443,1530,1843], mru:[137,204,310]},
+  "Single-Family|UT": {props:7,   mgmt:[7.75,8.0,9.0],  rent:[2168,2290,2313], mru:[273,312,334]},
+  "Single-Family":    {props:445, mgmt:[7.5,8.0,8.0],   rent:[1845,2265,2680], mru:[241,290,359]},
+};
+
 // Cost to manage a door is a flat user-controlled input on the Calculator tab.
 // Default is $150/door/month. Segmented cost-to-serve modeling is a separate
 // workstream that requires PM department P&L, headcount allocation, and
@@ -801,6 +877,77 @@ function doorsBand(d) {
   if (d <= 10) return "5_to_10";
   return "11_plus";
 }
+// Deal grade: pick the highest grade where ALL three thresholds are met.
+// contribution: $/door/month, cushion: percentage points (current fee − breakeven),
+// years: expected years managed (from retention-weighted hold).
+function computeDealGrade(contribution, cushionPoints, expectedYears) {
+  if (contribution < -25 || cushionPoints < -1)        return { grade: "F", note: "Loses meaningful money at proposed fee" };
+  if (contribution < 0 || cushionPoints < 0)           return { grade: "D", note: "Below breakeven; reprice or pass" };
+  if (contribution < 50 || cushionPoints < 1.5)        return { grade: "C", note: "Marginal; thin cushion to breakeven" };
+  if (contribution < 100 || cushionPoints < 3 || (expectedYears || 0) < 3)
+                                                       return { grade: "B", note: "Solid deal; healthy contribution" };
+  return { grade: "A", note: "Strong deal across contribution, cushion, and tenure" };
+}
+
+// Build a portfolio benchmark panel comparing this property's mgmt fee, rent
+// per door, and Atlas-keep MRU per door against the segment's distribution.
+// Uses asset-type|state segmentation, falling back to portfolio-wide if the
+// segment is too thin (fewer than 5 properties).
+function renderBenchmarks(input, rev) {
+  const segKey = input.asset_type + "|" + input.state;
+  let bench = PORTFOLIO_BENCHMARKS[segKey];
+  let segLabel = input.asset_type + " in " + input.state;
+  if (!bench || bench.props < 5) {
+    bench = PORTFOLIO_BENCHMARKS[input.asset_type];
+    segLabel = "Portfolio-wide " + input.asset_type + " (no local data for " + input.state + ")";
+  }
+  const rentPd = input.rent;
+  const mgmtPct = input.mgmt_fee * 100;
+  const mruPd = rev.atlas_wallet;
+
+  function row(label, value, fmt, range) {
+    const [lo, mid, hi] = range;
+    // Compute a percentile-style position for the marker. We treat lo as 25th,
+    // mid as 50th, hi as 75th and linearly interpolate. Below lo/above hi
+    // get clamped to a small visual buffer.
+    let pct;
+    if (value <= lo)       pct = Math.max(2, 12.5 + (value - lo) / Math.max(1, lo) * 12);
+    else if (value <= mid) pct = 25 + (value - lo) / Math.max(1, mid - lo) * 25;
+    else if (value <= hi)  pct = 50 + (value - mid) / Math.max(1, hi - mid) * 25;
+    else                   pct = Math.min(98, 75 + (value - hi) / Math.max(1, hi) * 12);
+    pct = Math.max(2, Math.min(98, pct));
+    const compareNote = value < lo ? "below P25"
+                      : value > hi ? "above P75"
+                      : value < mid ? "P25–P50"
+                      : "P50–P75";
+    return `
+      <div class="bench-row">
+        <div class="bench-label">${label}</div>
+        <div>
+          <div class="bench-bar-wrap">
+            <div class="bench-bar-quart" style="left:25%; width:50%;"></div>
+            <div class="bench-bar-marker" style="left:${pct}%;" title="${compareNote}"></div>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:10px; color:#999; margin-top:3px;">
+            <span>${fmt(lo)} (P25)</span>
+            <span>${fmt(mid)} (median)</span>
+            <span>${fmt(hi)} (P75)</span>
+          </div>
+        </div>
+        <div class="bench-value"><strong>${fmt(value)}</strong><br><span style="font-size:10px;">${compareNote}</span></div>
+      </div>`;
+  }
+  const $ = (n) => "$" + Math.round(n).toLocaleString("en-US");
+  const pct = (n) => n.toFixed(1) + "%";
+  const html = `
+    <div style="font-size:11px; color:#888; margin-bottom:6px;">Segment: <strong>${segLabel}</strong> · ${bench.props} properties</div>
+    ${row("Mgmt Fee %", mgmtPct, pct, bench.mgmt)}
+    ${row("Rent / Door", rentPd, $, bench.rent)}
+    ${row("MRU / Door", mruPd, $, bench.mru)}
+  `;
+  document.getElementById("benchmark_panel").innerHTML = html;
+}
+
 function fmtMoney(n) {
   return "$" + n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
@@ -1076,6 +1223,17 @@ function syncPropertyStatus() {
   if (wrap) wrap.style.display = (ps && ps.value === "lease_up") ? "" : "none";
 }
 
+// Sales vs Underwriting mode. Sales mode hides deeper inputs (fee allocation,
+// min fee detail, cost override) so deal teams see a clean what-if surface.
+function setMode(mode) {
+  document.body.classList.toggle("sales-mode", mode === "sales");
+  const sBtn = document.getElementById("mode_sales");
+  const uBtn = document.getElementById("mode_underwriting");
+  if (sBtn) sBtn.classList.toggle("active", mode === "sales");
+  if (uBtn) uBtn.classList.toggle("active", mode !== "sales");
+  try { localStorage.setItem("atlas_mru_mode", mode); } catch (e) {}
+}
+
 // Build the fee allocation matrix (one row per resident-paid fee + RBP)
 function populateFeeAllocation() {
   const tbody = document.getElementById("fee_alloc_tbody");
@@ -1125,6 +1283,19 @@ function calculate() {
   document.getElementById("kpi_contrib_yr").textContent = fmtMoneyWhole(annual) + " / door / year";
   document.getElementById("kpi_breakeven").textContent = breakeven !== null ? (breakeven * 100).toFixed(2) + "%" : "—";
   document.getElementById("lifetime").textContent = fmtMoneyWhole(lifetime);
+
+  // Deal grade
+  const cushionPoints = breakeven !== null ? (input.mgmt_fee - breakeven) * 100 : -10;
+  const grade = computeDealGrade(contribution, cushionPoints, rev.expected_years_managed);
+  const gradeCard = document.getElementById("kpi_grade_card");
+  const gradeEl = document.getElementById("kpi_grade");
+  const gradeSub = document.getElementById("kpi_grade_sub");
+  gradeEl.textContent = grade.grade;
+  gradeSub.textContent = grade.note;
+  gradeCard.className = "kpi grade-" + grade.grade;
+
+  // Portfolio benchmarks
+  renderBenchmarks(input, rev);
 
   // Contribution card style
   const card = document.getElementById("kpi_contrib_card");
@@ -1976,6 +2147,11 @@ populateFeeAllocation();
 document.querySelectorAll("#fee_alloc_tbody select[data-fee]").forEach(sel => {
   sel.addEventListener("change", () => calculate());
 });
+
+// Initial mode (default sales unless user previously chose underwriting)
+let __initialMode = "sales";
+try { __initialMode = localStorage.getItem("atlas_mru_mode") || "sales"; } catch (e) {}
+setMode(__initialMode);
 
 // Initial render
 syncFeeLabels();
