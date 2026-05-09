@@ -88,7 +88,8 @@
     border-color: var(--atlas-blue);
     box-shadow: 0 0 0 2px rgba(46,89,132,0.15);
   }
-  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
+  .row > div { display: flex; flex-direction: column; justify-content: flex-end; }
   button {
     background: var(--atlas-navy);
     color: white;
