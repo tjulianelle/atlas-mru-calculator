@@ -719,31 +719,47 @@ const RETENTION_HAZARD = {
 const COST_DEFAULT = 150;
 
 // Year 1 ramp overrides for non-standard property status.
-// Stabilized: ~90% occupied at onboarding, near-steady-state mgmt fee from day 1
-// but resident fees still take months to ramp because inherited residents are
-// in good standing initially and RBP rollout is slower for existing residents.
+// CALIBRATED FROM DATA: longitudinal analysis of 3rd Party residential properties
+// with at least 24 months of management tenure. Cohort defined by ratio of
+// months 1-3 rent to Year 2 rent:
+//   Stabilized = >= 85% (early rent close to steady-state)
+//   Lease-Up   = <= 30% (came in essentially vacant)
+//   Standard   = in between (uses existing TENURE_RAMP curve)
+// Mgmt ramp is computed as Year 1 portfolio rent / Year 2 portfolio rent.
+// Resident ramp is computed as Year 1 net resident-fee revenue / Year 2 net.
+// Sample sizes: 244 SFR + 49 MF stabilized; 22 SFR + 97 MF standard; 24 SFR + 149 MF lease-up.
 //
-// Lease-Up: scaled by Months to Stabilize. Average occupancy across Year 1
-// drives mgmt fee ramp; resident ramp is lower because of move-in lag and
-// no fee history. Lease-up also adds 1 leasing event per door in Year 1
-// (handled in predictRevenue).
+// Lease-Up baseline reflects cohort average (~6-9 month lease-up).
+// Months-to-Stabilize input scales the ramp by the ratio of expected
+// Year 1 average occupancy to the baseline.
 function getYear1RampOverride(asset_type, status, months_to_stabilize) {
   if (status === "stabilized") {
+    // Empirical: SFR comes in fully ramped on both sides; MF mgmt slightly above
+    // steady-state in Year 1 (likely catching deferred items), resident still ramping.
     return asset_type === "Multi-Family"
-      ? { mgmt: 0.90, tenant: 0.70 }
-      : { mgmt: 0.92, tenant: 0.65 };
+      ? { mgmt: 1.06, tenant: 0.87 }
+      : { mgmt: 1.01, tenant: 1.01 };
   }
   if (status === "lease_up") {
     const m = Math.max(1, Math.min(24, months_to_stabilize || 6));
-    // Average occupancy across Year 1, given linear lease-up to month m
+    // Year 1 average occupancy if linear lease-up over m months
     const avgOcc = (m <= 12) ? (1 - m / 24) : (6 / m);
-    // Mgmt ramp: avg occupancy with ~7% discount for fee waivers / first-month-free
-    const mgmtRamp = avgOcc * 0.93;
-    // Resident ramp: lower because of move-in lag and slow fee accrual
-    const tenantRamp = avgOcc * 0.40;
-    return { mgmt: mgmtRamp, tenant: tenantRamp };
+    const baselineOcc = 0.75; // ~6-month lease-up baseline
+    const occRatio = avgOcc / baselineOcc;
+    // Empirical baselines, scaled by occupancy ratio to honor Months-to-Stabilize input.
+    // Cap at 1.0 to prevent over-scaling on very fast lease-ups (1-3 months).
+    if (asset_type === "Multi-Family") {
+      return {
+        mgmt:   Math.min(1.0, 0.46 * occRatio),
+        tenant: Math.min(1.0, 0.66 * occRatio),
+      };
+    }
+    return {
+      mgmt:   Math.min(1.0, 0.27 * occRatio),
+      tenant: Math.min(1.0, 0.62 * occRatio),
+    };
   }
-  return null; // standard — use existing TENURE_RAMP
+  return null; // standard — use existing TENURE_RAMP curve
 }
 
 // List of resident-paid fee keys used in the allocation matrix and breakdowns.
