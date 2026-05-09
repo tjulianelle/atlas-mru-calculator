@@ -463,6 +463,35 @@
       </div>
     </div>
 
+    <h3>Property Status &amp; Onboarding</h3>
+    <label>Status at Onboarding</label>
+    <select id="property_status" onchange="syncPropertyStatus()">
+      <option value="standard" selected>Standard (typical mixed onboarding)</option>
+      <option value="stabilized">Stabilized (90%+ occupied)</option>
+      <option value="lease_up">Lease-Up (full lease-up required)</option>
+    </select>
+    <div id="lease_up_wrap" style="display:none;">
+      <label>Months to Stabilize</label>
+      <input type="number" id="months_to_stabilize" value="6" min="1" max="24" step="1" />
+      <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+        How long until the property reaches stabilized occupancy. Drives Year 1 ramp and the lease-up leasing fee burst.
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Min Mgmt Fee ($/mo per property)</label>
+        <input type="number" id="min_mgmt_fee" value="0" min="0" step="100" />
+      </div>
+      <div>
+        <label>Min Fee Duration (months)</label>
+        <input type="number" id="min_mgmt_duration" value="0" min="0" max="36" step="1" />
+      </div>
+    </div>
+    <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+      Floor on management fee during early months when occupancy is low. Set both to zero to disable.
+    </div>
+
     <h3>Operating Toggles</h3>
     <div id="mf_style_wrap" style="display:none;">
       <label>MF Management Style</label>
@@ -514,6 +543,8 @@
     <div class="presets">
       <button onclick="loadPreset('co_sfr_typical')">CO SFR Typical</button>
       <button onclick="loadPreset('co_mf_typical')">CO MF Standard</button>
+      <button onclick="loadPreset('co_mf_stabilized')">CO MF Stabilized</button>
+      <button onclick="loadPreset('co_mf_lease_up')">CO MF Lease-Up</button>
       <button onclick="loadPreset('co_mf_onsite')">CO MF Onsite</button>
       <button onclick="loadPreset('co_mf_new')">New CO MF (Ramp)</button>
       <button onclick="loadPreset('az_sfr')">AZ SFR</button>
@@ -687,6 +718,34 @@ const RETENTION_HAZARD = {
 // operations input on doors-per-PM productivity.
 const COST_DEFAULT = 150;
 
+// Year 1 ramp overrides for non-standard property status.
+// Stabilized: ~90% occupied at onboarding, near-steady-state mgmt fee from day 1
+// but resident fees still take months to ramp because inherited residents are
+// in good standing initially and RBP rollout is slower for existing residents.
+//
+// Lease-Up: scaled by Months to Stabilize. Average occupancy across Year 1
+// drives mgmt fee ramp; resident ramp is lower because of move-in lag and
+// no fee history. Lease-up also adds 1 leasing event per door in Year 1
+// (handled in predictRevenue).
+function getYear1RampOverride(asset_type, status, months_to_stabilize) {
+  if (status === "stabilized") {
+    return asset_type === "Multi-Family"
+      ? { mgmt: 0.90, tenant: 0.70 }
+      : { mgmt: 0.92, tenant: 0.65 };
+  }
+  if (status === "lease_up") {
+    const m = Math.max(1, Math.min(24, months_to_stabilize || 6));
+    // Average occupancy across Year 1, given linear lease-up to month m
+    const avgOcc = (m <= 12) ? (1 - m / 24) : (6 / m);
+    // Mgmt ramp: avg occupancy with ~7% discount for fee waivers / first-month-free
+    const mgmtRamp = avgOcc * 0.93;
+    // Resident ramp: lower because of move-in lag and slow fee accrual
+    const tenantRamp = avgOcc * 0.40;
+    return { mgmt: mgmtRamp, tenant: tenantRamp };
+  }
+  return null; // standard — use existing TENURE_RAMP
+}
+
 // List of resident-paid fee keys used in the allocation matrix and breakdowns.
 // Display labels paired with internal keys.
 const RESIDENT_FEES = [
@@ -755,16 +814,21 @@ function computeRenewalFee(rent, type, amount) {
 // each year and the retention hazard. Returns survival-weighted "effective"
 // ramp factors plus the expected number of years managed (sum of survival
 // probabilities). Used by predictRevenue and lifetimeContribution.
-function computeHoldEconomics(asset_type, hold_period_years) {
+function computeHoldEconomics(asset_type, hold_period_years, status, months_to_stabilize) {
   const horizon = Math.max(1, Math.round(hold_period_years || 5));
   let cumSurvival = 1.0;
   let weightedMgmt = 0, weightedTenant = 0, totalSurvival = 0;
   const yearly = [];
+  const year1Override = getYear1RampOverride(asset_type, status, months_to_stabilize);
   for (let y = 0; y < horizon; y++) {
     // Use mid-year tenure (months 6, 18, 30, ...) to pick the band
     const midMonths = y * 12 + 6;
     const tBand = tenureBand(midMonths);
-    const ramp = TENURE_RAMP[asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+    let ramp = TENURE_RAMP[asset_type + "|" + tBand] || {mgmt: 1, tenant: 1};
+    // Override Year 1 ramp factors if property status is stabilized or lease-up
+    if (y === 0 && year1Override) {
+      ramp = year1Override;
+    }
     const hazardYear = Math.min(y, 5);
     const hazard = RETENTION_HAZARD[asset_type + "|" + hazardYear] || 0.05;
     cumSurvival *= (1 - hazard);
@@ -775,6 +839,8 @@ function computeHoldEconomics(asset_type, hold_period_years) {
   }
   return {
     horizon,
+    year1_override: year1Override,
+    property_status: status || "standard",
     effective_mgmt_ramp: totalSurvival > 0 ? weightedMgmt / totalSurvival : 1,
     effective_tenant_ramp: totalSurvival > 0 ? weightedTenant / totalSurvival : 1,
     expected_years_managed: totalSurvival,
@@ -785,20 +851,42 @@ function computeHoldEconomics(asset_type, hold_period_years) {
 function predictRevenue(input) {
   const {asset_type, state, doors, rent, mgmt_fee, hold_period,
          leasing_type, leasing_amount, renewal_type, renewal_amount,
-         mf_style, rbp_status, fee_allocation} = input;
+         mf_style, rbp_status, fee_allocation,
+         property_status, months_to_stabilize,
+         min_mgmt_fee, min_mgmt_duration} = input;
 
   const isOnsite = (asset_type === "Multi-Family" && mf_style === "Onsite");
   const rbpOptIn = (rbp_status !== "opt_out");
   const allocation = fee_allocation || {};
 
-  // Survival-weighted effective ramp factors across the expected hold
-  const hold = computeHoldEconomics(asset_type, hold_period);
+  // Survival-weighted effective ramp factors across the expected hold,
+  // honoring property status (stabilized / standard / lease-up).
+  const hold = computeHoldEconomics(asset_type, hold_period, property_status, months_to_stabilize);
   const effMgmt = hold.effective_mgmt_ramp;
   const effTenant = hold.effective_tenant_ramp;
 
   // Net management fee per door per month (vacancy + effective mgmt ramp)
   const vacancyFactor = 1 - (0.5 / 30.5);
-  const mgmtFee = rent * mgmt_fee * vacancyFactor * effMgmt;
+  let mgmtFee = rent * mgmt_fee * vacancyFactor * effMgmt;
+
+  // Apply minimum mgmt fee floor over the duration period.
+  // Re-blends the per-year mgmt fee with max(percent-based, min-fee-per-door)
+  // for the months covered, then survival-weights into the average.
+  const minFee = parseFloat(min_mgmt_fee) || 0;
+  const minDur = parseFloat(min_mgmt_duration) || 0;
+  if (minFee > 0 && minDur > 0 && hold.expected_years_managed > 0) {
+    const minPerDoor = minFee / Math.max(1, doors || 1);
+    let weighted = 0;
+    for (const yr of hold.yearly) {
+      const standardYear = rent * mgmt_fee * vacancyFactor * yr.ramp_mgmt;
+      const monthsCovered = Math.max(0, Math.min(minDur - (yr.year - 1) * 12, 12));
+      const fracCovered = monthsCovered / 12;
+      const yearMonthly = fracCovered * Math.max(standardYear, minPerDoor)
+                        + (1 - fracCovered) * standardYear;
+      weighted += yearMonthly * yr.survival;
+    }
+    mgmtFee = weighted / hold.expected_years_managed;
+  }
 
   // Leasing & renewal: empirical event frequency x property-specific fee
   // Onsite MF earns no leasing/renewal income (onsite team does the work).
@@ -810,8 +898,18 @@ function predictRevenue(input) {
   const renewalFeePerEvent = computeRenewalFee(rent, renewal_type, renewal_amount);
   const leasingEventsEff = events.leasing * effTenant;
   const renewalEventsEff = events.renewal * effTenant;
-  const leasingMRU = isOnsite ? 0 : (leasingFeePerEvent * leasingEventsEff / 12);
+  let leasingMRU = isOnsite ? 0 : (leasingFeePerEvent * leasingEventsEff / 12);
   const renewalMRU = isOnsite ? 0 : (renewalFeePerEvent * renewalEventsEff / 12);
+
+  // Lease-up leasing fee burst: 1 extra leasing event per door in Year 1.
+  // Survival-weighted into the per-month-per-door average across the hold.
+  // Skipped for Onsite MF because the onsite team handles lease-up leasing.
+  let leaseUpBurst = 0;
+  if (property_status === "lease_up" && !isOnsite && hold.expected_years_managed > 0) {
+    const year1Survival = hold.yearly[0] ? hold.yearly[0].survival : 1;
+    leaseUpBurst = leasingFeePerEvent * year1Survival / (hold.expected_years_managed * 12);
+    leasingMRU += leaseUpBurst;
+  }
 
   // Resident-side fees from lookup, scaled by effective ramp.
   // Each fee is then filtered by the Atlas/Owner allocation toggle.
@@ -859,11 +957,15 @@ function predictRevenue(input) {
     atlas_wallet: mgmtFee + leasingMRU + renewalMRU + residentAtlasTotal,
     is_onsite: isOnsite,
     rbp_opt_in: rbpOptIn,
+    property_status: property_status || "standard",
+    lease_up_burst: leaseUpBurst,
+    min_mgmt_fee_applied: (minFee > 0 && minDur > 0),
     // Hold-period meta
     effective_mgmt_ramp: effMgmt,
     effective_tenant_ramp: effTenant,
     expected_years_managed: hold.expected_years_managed,
     horizon: hold.horizon,
+    year1_override: hold.year1_override,
   };
 }
 
@@ -918,6 +1020,10 @@ function readInputs() {
     rbp_status: document.getElementById("rbp_status") ? document.getElementById("rbp_status").value : "opt_in",
     onsite_labor: parseFloat((document.getElementById("onsite_labor") || {}).value) || 0,
     cost_per_door: parseFloat((document.getElementById("cost_per_door") || {}).value) || COST_DEFAULT,
+    property_status: document.getElementById("property_status") ? document.getElementById("property_status").value : "standard",
+    months_to_stabilize: parseInt((document.getElementById("months_to_stabilize") || {}).value) || 6,
+    min_mgmt_fee: parseFloat((document.getElementById("min_mgmt_fee") || {}).value) || 0,
+    min_mgmt_duration: parseInt((document.getElementById("min_mgmt_duration") || {}).value) || 0,
     fee_allocation,
   };
 }
@@ -945,6 +1051,13 @@ function syncMFStyle() {
   const isOnsite = isMF && styleSel && styleSel.value === "Onsite";
   const laborWrap = document.getElementById("onsite_labor_wrap");
   if (laborWrap) laborWrap.style.display = isOnsite ? "" : "none";
+}
+
+// Show / hide Months to Stabilize based on Property Status
+function syncPropertyStatus() {
+  const ps = document.getElementById("property_status");
+  const wrap = document.getElementById("lease_up_wrap");
+  if (wrap) wrap.style.display = (ps && ps.value === "lease_up") ? "" : "none";
 }
 
 // Build the fee allocation matrix (one row per resident-paid fee + RBP)
@@ -1078,11 +1191,14 @@ function findBreakeven() {
   calculate();
 }
 
-const PRESET_BASE = {mf_style:"Standard", rbp_status:"opt_in", onsite_labor:0, cost_per_door:150};
+const PRESET_BASE = {mf_style:"Standard", rbp_status:"opt_in", onsite_labor:0, cost_per_door:150,
+                     property_status:"standard", months_to_stabilize:6, min_mgmt_fee:0, min_mgmt_duration:0};
 const PRESETS = {
   co_sfr_typical:       {...PRESET_BASE, asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
   co_mf_typical:        {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
   co_mf_onsite:         {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:50, rent:1400, mgmt_fee:3.0, hold_period:5, leasing_type:"none", leasing_amount:0, renewal_type:"none", renewal_amount:0, mf_style:"Onsite", onsite_labor:75},
+  co_mf_lease_up:       {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:50, rent:1700, mgmt_fee:6.0, hold_period:7, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20, property_status:"lease_up", months_to_stabilize:6, min_mgmt_fee:5000, min_mgmt_duration:6},
+  co_mf_stabilized:     {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:24, rent:1500, mgmt_fee:7.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20, property_status:"stabilized"},
   co_mf_new:            {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
   az_sfr:               {...PRESET_BASE, asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
   co_mf_low_rent:       {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:4, rent:1100, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
@@ -1107,9 +1223,14 @@ function loadPreset(key) {
   if (document.getElementById("rbp_status") && p.rbp_status) document.getElementById("rbp_status").value = p.rbp_status;
   if (document.getElementById("onsite_labor") && p.onsite_labor !== undefined) document.getElementById("onsite_labor").value = p.onsite_labor;
   if (document.getElementById("cost_per_door") && p.cost_per_door !== undefined) document.getElementById("cost_per_door").value = p.cost_per_door;
+  if (document.getElementById("property_status") && p.property_status) document.getElementById("property_status").value = p.property_status;
+  if (document.getElementById("months_to_stabilize") && p.months_to_stabilize !== undefined) document.getElementById("months_to_stabilize").value = p.months_to_stabilize;
+  if (document.getElementById("min_mgmt_fee") && p.min_mgmt_fee !== undefined) document.getElementById("min_mgmt_fee").value = p.min_mgmt_fee;
+  if (document.getElementById("min_mgmt_duration") && p.min_mgmt_duration !== undefined) document.getElementById("min_mgmt_duration").value = p.min_mgmt_duration;
   // Reset fee allocation to all Atlas (presets are clean defaults)
   resetFeeAllocation();
   syncFeeLabels();
+  syncPropertyStatus();
   calculate();
 }
 
@@ -1188,6 +1309,10 @@ function loadScenarioById(id) {
   if (document.getElementById("rbp_status"))  document.getElementById("rbp_status").value = i.rbp_status || "opt_in";
   if (document.getElementById("onsite_labor")) document.getElementById("onsite_labor").value = i.onsite_labor || 0;
   if (document.getElementById("cost_per_door")) document.getElementById("cost_per_door").value = (i.cost_per_door !== undefined ? i.cost_per_door : 150);
+  if (document.getElementById("property_status")) document.getElementById("property_status").value = i.property_status || "standard";
+  if (document.getElementById("months_to_stabilize")) document.getElementById("months_to_stabilize").value = i.months_to_stabilize || 6;
+  if (document.getElementById("min_mgmt_fee")) document.getElementById("min_mgmt_fee").value = i.min_mgmt_fee || 0;
+  if (document.getElementById("min_mgmt_duration")) document.getElementById("min_mgmt_duration").value = i.min_mgmt_duration || 0;
   // Restore fee allocation if it was persisted; otherwise reset
   resetFeeAllocation();
   if (i.fee_allocation) {
@@ -1197,6 +1322,7 @@ function loadScenarioById(id) {
     });
   }
   syncFeeLabels();
+  syncPropertyStatus();
   calculate();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -1821,7 +1947,8 @@ function exportPDF() {
 // Auto-calc on input change
 ["addr_street","addr_city","asset_type","state","doors","rent","mgmt_fee","hold_period",
  "leasing_type","leasing_amount","renewal_type","renewal_amount",
- "mf_style","rbp_status","onsite_labor","cost_per_door"].forEach(id => {
+ "mf_style","rbp_status","onsite_labor","cost_per_door",
+ "property_status","months_to_stabilize","min_mgmt_fee","min_mgmt_duration"].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener("change", () => { syncFeeLabels(); calculate(); });
@@ -1836,6 +1963,7 @@ document.querySelectorAll("#fee_alloc_tbody select[data-fee]").forEach(sel => {
 
 // Initial render
 syncFeeLabels();
+syncPropertyStatus();
 calculate();
 renderSavedScenarios();
 </script>
