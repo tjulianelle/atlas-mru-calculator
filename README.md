@@ -1,8 +1,16 @@
 # Atlas MRU v2 Calculator
 
-Browser-based revenue prediction tool for Atlas Real Estate's 3rd Party Property Management business. Predicts Atlas-keep MRU per door, fully-loaded cost, contribution, breakeven management fee, and lifetime contribution adjusted for retention probability.
+Browser-based revenue prediction tool for Atlas Real Estate's 3rd Party Property Management business. Predicts Atlas-keep MRU per door, contribution per unit, breakeven management fee, and lifetime contribution adjusted for retention probability.
 
-Built off the trailing twelve months of Snowflake bill data (April 2026), validated against 967 active 3rd Party residential properties. Mean absolute prediction error of 11.8 percent on a 40-property random back-test, with no systematic bias.
+Built off the trailing twelve months of Snowflake bill data, validated against 967 active 3rd Party residential properties. Mean absolute prediction error of 11.8 percent on a 40-property random back-test, with no systematic bias.
+
+## What's New
+
+- **MF Management Style toggle**: Standard (offsite, full revenue, full cost) or Onsite (lower fee, no leasing/renewal income, salary passthrough to owner)
+- **RBP toggle**: Opt-in or Opt-out at the property level
+- **Per-fee Atlas/Owner allocation matrix**: every resident-paid fee is individually toggleable to Atlas or Owner
+- **Resident terminology**: replaces "tenant" throughout
+- **Cost to Manage per Door**: a flat user-controlled input. Segmented cost-to-serve modeling is a separate workstream
 
 ## What's in the Repo
 

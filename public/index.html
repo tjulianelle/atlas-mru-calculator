@@ -422,6 +422,12 @@
       Atlas MRU is the survival-weighted average across the hold period. Year 1 revenue is lower because of the onboarding ramp; longer holds dilute that drag.
     </div>
 
+    <label>Cost to Manage per Door ($/mo)</label>
+    <input type="number" id="cost_per_door" value="150" min="0" step="5" />
+    <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+      Fully-loaded Atlas cost per door per month. Override per deal as needed. Segmented cost-to-serve modeling is a separate workstream.
+    </div>
+
     <h3>Leasing &amp; Renewal Terms</h3>
     <div class="row">
       <div>
@@ -453,6 +459,47 @@
       </div>
     </div>
 
+    <h3>Operating Toggles</h3>
+    <div id="mf_style_wrap" style="display:none;">
+      <label>MF Management Style</label>
+      <select id="mf_style" onchange="syncMFStyle()">
+        <option value="Standard">Standard (offsite, full revenue, full cost)</option>
+        <option value="Onsite">Onsite (lower fee, salary passthrough, no leasing/renewal)</option>
+      </select>
+      <div id="onsite_labor_wrap" style="display:none;">
+        <label>Owner-Borne Onsite Labor Budget ($/door/mo)</label>
+        <input type="number" id="onsite_labor" value="0" min="0" step="5" />
+        <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+          Informational only. Not in Atlas P&amp;L; this is what the owner pays directly to onsite staff.
+        </div>
+      </div>
+    </div>
+
+    <label>RBP Status</label>
+    <select id="rbp_status">
+      <option value="opt_in" selected>Opt-in (RBP revenue counts to MRU)</option>
+      <option value="opt_out">Opt-out (zero RBP)</option>
+    </select>
+
+    <h3 style="margin-top:18px; cursor:pointer;" onclick="toggleFeeAllocation()">
+      Resident Fee Allocation <span id="fee_alloc_caret" style="font-size:10px;">▼</span>
+    </h3>
+    <div id="fee_alloc_panel" style="display:none; margin-bottom:14px;">
+      <div style="font-size:11px; color:#888; margin-bottom:8px; line-height:1.4;">
+        Each resident-paid fee can be allocated to Atlas or Owner per the deal. Atlas-allocated fees count toward MRU.
+      </div>
+      <table style="width:100%; font-size:12px;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:4px 6px; border-bottom:1px solid var(--atlas-mid);">Resident Fee</th>
+            <th style="text-align:right; padding:4px 6px; border-bottom:1px solid var(--atlas-mid);">Allocate To</th>
+          </tr>
+        </thead>
+        <tbody id="fee_alloc_tbody"></tbody>
+      </table>
+      <button class="secondary" onclick="resetFeeAllocation()" style="margin-top:8px;">Reset to All Atlas</button>
+    </div>
+
     <button onclick="calculate()">Calculate</button>
     <button class="secondary" onclick="findBreakeven()">Solve Breakeven Fee</button>
     <button class="secondary" onclick="saveCurrentScenario()">Save Scenario</button>
@@ -462,7 +509,8 @@
     <h3>Quick Presets</h3>
     <div class="presets">
       <button onclick="loadPreset('co_sfr_typical')">CO SFR Typical</button>
-      <button onclick="loadPreset('co_mf_typical')">CO MF Typical</button>
+      <button onclick="loadPreset('co_mf_typical')">CO MF Standard</button>
+      <button onclick="loadPreset('co_mf_onsite')">CO MF Onsite</button>
       <button onclick="loadPreset('co_mf_new')">New CO MF (Ramp)</button>
       <button onclick="loadPreset('az_sfr')">AZ SFR</button>
       <button onclick="loadPreset('co_mf_low_rent')">Low-Rent CO MF</button>
@@ -495,9 +543,9 @@
           <div class="kpi-sub">per door / month</div>
         </div>
         <div class="kpi">
-          <div class="kpi-label">Cost to Serve</div>
+          <div class="kpi-label">Monthly Expense / Unit</div>
           <div class="kpi-value" id="kpi_cost">$0</div>
-          <div class="kpi-sub">fully-loaded / door</div>
+          <div class="kpi-sub">fully-loaded Atlas cost</div>
         </div>
         <div class="kpi" id="kpi_contrib_card">
           <div class="kpi-label">Contribution</div>
@@ -629,8 +677,28 @@ const RETENTION_HAZARD = {
   "Single-Family|3": 0.07, "Single-Family|4": 0.06, "Single-Family|5": 0.04,
 };
 
-// Flat cost-to-serve assumption: $150 per door per month, fully loaded
-const COST_FLAT = 150;
+// Cost to manage a door is a flat user-controlled input on the Calculator tab.
+// Default is $150/door/month. Segmented cost-to-serve modeling is a separate
+// workstream that requires PM department P&L, headcount allocation, and
+// operations input on doors-per-PM productivity.
+const COST_DEFAULT = 150;
+
+// List of resident-paid fee keys used in the allocation matrix and breakdowns.
+// Display labels paired with internal keys.
+const RESIDENT_FEES = [
+  {key: "late",            label: "Late fees"},
+  {key: "nsf",             label: "NSF"},
+  {key: "posting",         label: "Posting"},
+  {key: "app_inspect",     label: "Application + inspection"},
+  {key: "utility_billing", label: "Utility billing"},
+  {key: "lease_break",     label: "Lease break"},
+  {key: "lease_mod",       label: "Lease modification"},
+  {key: "termination",     label: "Termination"},
+  {key: "admin_keep",      label: "Admin (Atlas-keep)"},
+  {key: "pet_atlas",       label: "Pet non-refundable (Atlas share)"},
+];
+// In Onsite MF, leasing-event fees flow to owner because the onsite team does the work.
+const ONSITE_FORCED_OWNER = new Set(["app_inspect", "lease_break"]);
 
 // ============================================================
 // HELPERS
@@ -712,7 +780,12 @@ function computeHoldEconomics(asset_type, hold_period_years) {
 
 function predictRevenue(input) {
   const {asset_type, state, doors, rent, mgmt_fee, hold_period,
-         leasing_type, leasing_amount, renewal_type, renewal_amount} = input;
+         leasing_type, leasing_amount, renewal_type, renewal_amount,
+         mf_style, rbp_status, fee_allocation} = input;
+
+  const isOnsite = (asset_type === "Multi-Family" && mf_style === "Onsite");
+  const rbpOptIn = (rbp_status !== "opt_out");
+  const allocation = fee_allocation || {};
 
   // Survival-weighted effective ramp factors across the expected hold
   const hold = computeHoldEconomics(asset_type, hold_period);
@@ -724,6 +797,7 @@ function predictRevenue(input) {
   const mgmtFee = rent * mgmt_fee * vacancyFactor * effMgmt;
 
   // Leasing & renewal: empirical event frequency x property-specific fee
+  // Onsite MF earns no leasing/renewal income (onsite team does the work).
   const rBand = rentBand(rent);
   const eventsKey = asset_type + "|" + rBand;
   const events = LEASING_EVENTS_LOOKUP[eventsKey] || LEASING_EVENTS_DEFAULT[asset_type];
@@ -732,36 +806,55 @@ function predictRevenue(input) {
   const renewalFeePerEvent = computeRenewalFee(rent, renewal_type, renewal_amount);
   const leasingEventsEff = events.leasing * effTenant;
   const renewalEventsEff = events.renewal * effTenant;
-  const leasingMRU = leasingFeePerEvent * leasingEventsEff / 12;
-  const renewalMRU = renewalFeePerEvent * renewalEventsEff / 12;
+  const leasingMRU = isOnsite ? 0 : (leasingFeePerEvent * leasingEventsEff / 12);
+  const renewalMRU = isOnsite ? 0 : (renewalFeePerEvent * renewalEventsEff / 12);
 
-  // Tenant-side fees from lookup, scaled by effective tenant ramp
+  // Resident-side fees from lookup, scaled by effective ramp.
+  // Each fee is then filtered by the Atlas/Owner allocation toggle.
   const segKey = asset_type + "|" + state + "|" + rBand;
   let segment = TENANT_FEE_LOOKUP[segKey];
   if (!segment || segment.props < 10) {
     segment = TENANT_FEE_DEFAULT[asset_type];
   }
-  const tenantFees = {};
-  let tenantTotal = 0;
-  const keys = ["late","nsf","posting","app_inspect","utility_billing","lease_break","lease_mod","termination","admin_keep","pet_atlas","rbp_net"];
-  for (const k of keys) {
-    const v = (segment[k] || 0) * effTenant;
-    tenantFees[k] = v;
-    tenantTotal += v;
+  const residentFeesGross = {};
+  const residentFeesAtlas = {};
+  let residentAtlasTotal = 0;
+  for (const fee of RESIDENT_FEES) {
+    const k = fee.key;
+    const gross = (segment[k] || 0) * effTenant;
+    residentFeesGross[k] = gross;
+    // Atlas keeps if allocated to Atlas AND not zeroed out by Onsite MF rule
+    const allocatedToAtlas = allocation[k] !== "Owner";
+    const onsiteForced = isOnsite && ONSITE_FORCED_OWNER.has(k);
+    const atlasShare = (allocatedToAtlas && !onsiteForced) ? gross : 0;
+    residentFeesAtlas[k] = atlasShare;
+    residentAtlasTotal += atlasShare;
   }
+
+  // RBP separately — opt-in/opt-out and its own allocation toggle
+  const rbpGross = (segment.rbp_net || 0) * effTenant;
+  const rbpAllocAtlas = allocation.rbp_net !== "Owner";
+  const rbpAtlas = (rbpOptIn && rbpAllocAtlas) ? rbpGross : 0;
+  residentFeesGross.rbp_net = rbpGross;
+  residentFeesAtlas.rbp_net = rbpAtlas;
+  residentAtlasTotal += rbpAtlas;
 
   return {
     mgmt: mgmtFee,
     leasing: leasingMRU,
     renewal: renewalMRU,
     leasing_renewal: leasingMRU + renewalMRU,
-    leasing_events_per_year: leasingEventsEff,
-    renewal_events_per_year: renewalEventsEff,
+    leasing_events_per_year: isOnsite ? 0 : leasingEventsEff,
+    renewal_events_per_year: isOnsite ? 0 : renewalEventsEff,
     leasing_fee_per_event: leasingFeePerEvent,
     renewal_fee_per_event: renewalFeePerEvent,
-    tenant_fees: tenantFees,
-    tenant_total: tenantTotal,
-    atlas_wallet: mgmtFee + leasingMRU + renewalMRU + tenantTotal,
+    // Keep `tenant_fees` key for backward-compat with saved scenarios and Excel export
+    tenant_fees: residentFeesAtlas,
+    resident_fees_gross: residentFeesGross,
+    tenant_total: residentAtlasTotal,
+    atlas_wallet: mgmtFee + leasingMRU + renewalMRU + residentAtlasTotal,
+    is_onsite: isOnsite,
+    rbp_opt_in: rbpOptIn,
     // Hold-period meta
     effective_mgmt_ramp: effMgmt,
     effective_tenant_ramp: effTenant,
@@ -771,8 +864,11 @@ function predictRevenue(input) {
 }
 
 function predictCost(input) {
-  // Flat $150 per door per month, fully loaded
-  return { ops: COST_FLAT, overhead: 0, total: COST_FLAT };
+  // Flat per-door cost driven by the user input field. No segmentation yet.
+  const total = (typeof input.cost_per_door === "number" && !isNaN(input.cost_per_door))
+    ? input.cost_per_door
+    : COST_DEFAULT;
+  return { ops: total, overhead: 0, total: total };
 }
 
 // Lifetime contribution = blended_contribution × 12 × expected_years_managed
@@ -796,6 +892,11 @@ function solveBreakeven(input, target = 0) {
 // UI
 // ============================================================
 function readInputs() {
+  // Read fee allocation matrix (each row: data-key + select value)
+  const fee_allocation = {};
+  document.querySelectorAll("#fee_alloc_tbody select[data-fee]").forEach(sel => {
+    fee_allocation[sel.getAttribute("data-fee")] = sel.value;
+  });
   return {
     addr_street: document.getElementById("addr_street").value || "",
     addr_city: document.getElementById("addr_city").value || "",
@@ -809,6 +910,11 @@ function readInputs() {
     leasing_amount: parseFloat(document.getElementById("leasing_amount").value) || 0,
     renewal_type: document.getElementById("renewal_type").value,
     renewal_amount: parseFloat(document.getElementById("renewal_amount").value) || 0,
+    mf_style: document.getElementById("mf_style") ? document.getElementById("mf_style").value : "Standard",
+    rbp_status: document.getElementById("rbp_status") ? document.getElementById("rbp_status").value : "opt_in",
+    onsite_labor: parseFloat((document.getElementById("onsite_labor") || {}).value) || 0,
+    cost_per_door: parseFloat((document.getElementById("cost_per_door") || {}).value) || COST_DEFAULT,
+    fee_allocation,
   };
 }
 
@@ -823,6 +929,51 @@ function syncFeeLabels() {
     rt === "flat" ? "Renewal Fee ($)" : "—";
   document.getElementById("leasing_amount").disabled = (lt === "none");
   document.getElementById("renewal_amount").disabled = (rt === "none");
+  syncMFStyle();
+}
+
+// Show / hide MF Style and Onsite Labor inputs based on asset type and style
+function syncMFStyle() {
+  const isMF = document.getElementById("asset_type").value === "Multi-Family";
+  const wrap = document.getElementById("mf_style_wrap");
+  if (wrap) wrap.style.display = isMF ? "" : "none";
+  const styleSel = document.getElementById("mf_style");
+  const isOnsite = isMF && styleSel && styleSel.value === "Onsite";
+  const laborWrap = document.getElementById("onsite_labor_wrap");
+  if (laborWrap) laborWrap.style.display = isOnsite ? "" : "none";
+}
+
+// Build the fee allocation matrix (one row per resident-paid fee + RBP)
+function populateFeeAllocation() {
+  const tbody = document.getElementById("fee_alloc_tbody");
+  if (!tbody) return;
+  const allFees = RESIDENT_FEES.concat([{key: "rbp_net", label: "RBP (net)"}]);
+  tbody.innerHTML = allFees.map(f => `
+    <tr>
+      <td style="padding:4px 6px; border-bottom:1px solid var(--atlas-mid);">${f.label}</td>
+      <td style="padding:4px 6px; border-bottom:1px solid var(--atlas-mid); text-align:right;">
+        <select data-fee="${f.key}" style="margin:0; padding:4px 6px; font-size:12px; width:100px;">
+          <option value="Atlas" selected>Atlas</option>
+          <option value="Owner">Owner</option>
+        </select>
+      </td>
+    </tr>
+  `).join("");
+}
+
+function resetFeeAllocation() {
+  document.querySelectorAll("#fee_alloc_tbody select[data-fee]").forEach(sel => {
+    sel.value = "Atlas";
+  });
+}
+
+function toggleFeeAllocation() {
+  const panel = document.getElementById("fee_alloc_panel");
+  const caret = document.getElementById("fee_alloc_caret");
+  if (!panel) return;
+  const isOpen = panel.style.display !== "none";
+  panel.style.display = isOpen ? "none" : "";
+  if (caret) caret.textContent = isOpen ? "▼" : "▲";
 }
 
 function calculate() {
@@ -867,36 +1018,49 @@ function calculate() {
   }
 
   // Revenue table
-  const leasingLabel = `Leasing fee (${rev.leasing_events_per_year.toFixed(2)} events/door/yr × ${fmtMoneyWhole(rev.leasing_fee_per_event)})`;
-  const renewalLabel = `Renewal fee (${rev.renewal_events_per_year.toFixed(2)} events/door/yr × ${fmtMoneyWhole(rev.renewal_fee_per_event)})`;
+  const leasingLabel = rev.is_onsite
+    ? `Leasing fee (zero — Onsite MF)`
+    : `Leasing fee (${rev.leasing_events_per_year.toFixed(2)} events/door/yr × ${fmtMoneyWhole(rev.leasing_fee_per_event)})`;
+  const renewalLabel = rev.is_onsite
+    ? `Renewal fee (zero — Onsite MF)`
+    : `Renewal fee (${rev.renewal_events_per_year.toFixed(2)} events/door/yr × ${fmtMoneyWhole(rev.renewal_fee_per_event)})`;
+  const rbpLabel = rev.rbp_opt_in ? "RBP (net of expense)" : "RBP (Opt-out — zero)";
+  const alloc = input.fee_allocation || {};
+  const tagOwner = (key) => alloc[key] === "Owner" ? " — to Owner" : "";
   const revRows = [
     ["Net management fee (after vacancy & ramp)", rev.mgmt],
     [leasingLabel, rev.leasing],
     [renewalLabel, rev.renewal],
-    ["Late fees", rev.tenant_fees.late],
-    ["NSF", rev.tenant_fees.nsf],
-    ["Posting", rev.tenant_fees.posting],
-    ["Application + inspection", rev.tenant_fees.app_inspect],
-    ["Utility billing", rev.tenant_fees.utility_billing],
-    ["Lease break", rev.tenant_fees.lease_break],
-    ["Lease modification", rev.tenant_fees.lease_mod],
-    ["Termination", rev.tenant_fees.termination],
-    ["Admin (Atlas-keep)", rev.tenant_fees.admin_keep],
-    ["Pet non-refundable (Atlas share)", rev.tenant_fees.pet_atlas],
-    ["RBP (net of expense)", rev.tenant_fees.rbp_net],
+    ["Late fees" + tagOwner("late"), rev.tenant_fees.late, rev.resident_fees_gross.late],
+    ["NSF" + tagOwner("nsf"), rev.tenant_fees.nsf, rev.resident_fees_gross.nsf],
+    ["Posting" + tagOwner("posting"), rev.tenant_fees.posting, rev.resident_fees_gross.posting],
+    ["Application + inspection" + tagOwner("app_inspect"), rev.tenant_fees.app_inspect, rev.resident_fees_gross.app_inspect],
+    ["Utility billing" + tagOwner("utility_billing"), rev.tenant_fees.utility_billing, rev.resident_fees_gross.utility_billing],
+    ["Lease break" + tagOwner("lease_break"), rev.tenant_fees.lease_break, rev.resident_fees_gross.lease_break],
+    ["Lease modification" + tagOwner("lease_mod"), rev.tenant_fees.lease_mod, rev.resident_fees_gross.lease_mod],
+    ["Termination" + tagOwner("termination"), rev.tenant_fees.termination, rev.resident_fees_gross.termination],
+    ["Admin (Atlas-keep)" + tagOwner("admin_keep"), rev.tenant_fees.admin_keep, rev.resident_fees_gross.admin_keep],
+    ["Pet non-refundable (Atlas share)" + tagOwner("pet_atlas"), rev.tenant_fees.pet_atlas, rev.resident_fees_gross.pet_atlas],
+    [rbpLabel + tagOwner("rbp_net"), rev.tenant_fees.rbp_net, rev.resident_fees_gross.rbp_net],
   ];
   const revBody = document.querySelector("#rev_table tbody");
   revBody.innerHTML = revRows
-    .filter(r => r[1] > 0.005)
-    .map(r => `<tr><td>${r[0]}</td><td class="right">${fmtMoney(r[1])}</td></tr>`)
+    .filter(r => (r[2] !== undefined ? r[2] : r[1]) > 0.005)
+    .map(r => {
+      const atlasVal = r[1];
+      const muted = atlasVal < 0.005 ? ' style="color:#bbb;"' : '';
+      return `<tr${muted}><td>${r[0]}</td><td class="right">${fmtMoney(atlasVal)}</td></tr>`;
+    })
     .join("") + `<tr class="total"><td>Total Atlas MRU</td><td class="right">${fmtMoney(rev.atlas_wallet)}</td></tr>`;
 
-  // Cost table — flat $150 per door per month, fully loaded
+  // Cost table — flat user input
   const costBody = document.querySelector("#cost_table tbody");
-  costBody.innerHTML = `
-    <tr class="total"><td>Cost-to-Serve (flat assumption)</td><td class="right">${fmtMoney(cost.total)}</td></tr>
-  `;
-
+  let costRows = `<tr><td>Cost to Manage per Door (input)</td><td class="right">${fmtMoney(cost.total)}</td></tr>`;
+  if (rev.is_onsite && input.onsite_labor > 0) {
+    costRows += `<tr style="color:#888;"><td><em>Owner-borne onsite labor (info only)</em></td><td class="right"><em>${fmtMoney(input.onsite_labor)}</em></td></tr>`;
+  }
+  costRows += `<tr class="total"><td>Atlas Monthly Expense / Unit</td><td class="right">${fmtMoney(cost.total)}</td></tr>`;
+  costBody.innerHTML = costRows;
 }
 
 function findBreakeven() {
@@ -910,15 +1074,17 @@ function findBreakeven() {
   calculate();
 }
 
+const PRESET_BASE = {mf_style:"Standard", rbp_status:"opt_in", onsite_labor:0, cost_per_door:150};
 const PRESETS = {
-  co_sfr_typical: {asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  co_mf_typical: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  co_mf_new: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  az_sfr: {asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  co_mf_low_rent: {asset_type:"Multi-Family", state:"CO", doors:4, rent:1100, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  high_end_sfr: {asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, hold_period:7, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  all_other_states_sfr: {asset_type:"Single-Family", state:"TX", doors:1, rent:2200, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
-  all_other_states_mf: {asset_type:"Multi-Family", state:"TX", doors:6, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_sfr_typical:       {...PRESET_BASE, asset_type:"Single-Family", state:"CO", doors:1, rent:2500, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_typical:        {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_onsite:         {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:50, rent:1400, mgmt_fee:3.0, hold_period:5, leasing_type:"none", leasing_amount:0, renewal_type:"none", renewal_amount:0, mf_style:"Onsite", onsite_labor:75},
+  co_mf_new:            {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:4, rent:1400, mgmt_fee:8.0, hold_period:3, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  az_sfr:               {...PRESET_BASE, asset_type:"Single-Family", state:"AZ", doors:1, rent:1900, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  co_mf_low_rent:       {...PRESET_BASE, asset_type:"Multi-Family",  state:"CO", doors:4, rent:1100, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  high_end_sfr:         {...PRESET_BASE, asset_type:"Single-Family", state:"CO", doors:1, rent:3500, mgmt_fee:8.0, hold_period:7, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  all_other_states_sfr: {...PRESET_BASE, asset_type:"Single-Family", state:"TX", doors:1, rent:2200, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
+  all_other_states_mf:  {...PRESET_BASE, asset_type:"Multi-Family",  state:"TX", doors:6, rent:1400, mgmt_fee:8.0, hold_period:5, leasing_type:"pct_first_month", leasing_amount:50, renewal_type:"pct_rent", renewal_amount:20},
 };
 
 function loadPreset(key) {
@@ -933,6 +1099,12 @@ function loadPreset(key) {
   document.getElementById("leasing_amount").value = p.leasing_amount;
   document.getElementById("renewal_type").value = p.renewal_type;
   document.getElementById("renewal_amount").value = p.renewal_amount;
+  if (document.getElementById("mf_style") && p.mf_style)   document.getElementById("mf_style").value = p.mf_style;
+  if (document.getElementById("rbp_status") && p.rbp_status) document.getElementById("rbp_status").value = p.rbp_status;
+  if (document.getElementById("onsite_labor") && p.onsite_labor !== undefined) document.getElementById("onsite_labor").value = p.onsite_labor;
+  if (document.getElementById("cost_per_door") && p.cost_per_door !== undefined) document.getElementById("cost_per_door").value = p.cost_per_door;
+  // Reset fee allocation to all Atlas (presets are clean defaults)
+  resetFeeAllocation();
   syncFeeLabels();
   calculate();
 }
@@ -1007,6 +1179,19 @@ function loadScenarioById(id) {
   document.getElementById("leasing_amount").value = i.leasing_amount;
   document.getElementById("renewal_type").value = i.renewal_type;
   document.getElementById("renewal_amount").value = i.renewal_amount;
+  // Restore new toggles, with safe defaults for older saved scenarios
+  if (document.getElementById("mf_style"))    document.getElementById("mf_style").value = i.mf_style || "Standard";
+  if (document.getElementById("rbp_status"))  document.getElementById("rbp_status").value = i.rbp_status || "opt_in";
+  if (document.getElementById("onsite_labor")) document.getElementById("onsite_labor").value = i.onsite_labor || 0;
+  if (document.getElementById("cost_per_door")) document.getElementById("cost_per_door").value = (i.cost_per_door !== undefined ? i.cost_per_door : 150);
+  // Restore fee allocation if it was persisted; otherwise reset
+  resetFeeAllocation();
+  if (i.fee_allocation) {
+    document.querySelectorAll("#fee_alloc_tbody select[data-fee]").forEach(sel => {
+      const k = sel.getAttribute("data-fee");
+      if (i.fee_allocation[k]) sel.value = i.fee_allocation[k];
+    });
+  }
   syncFeeLabels();
   calculate();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1072,7 +1257,7 @@ function exportExcel() {
   const cost = predictCost(input);
   const contribution = rev.atlas_wallet - cost.total;
   const breakeven = solveBreakeven(input);
-  const lifetime = lifetimeContribution(contribution, input.asset_type, input.tenure);
+  const lifetime = lifetimeContribution(contribution, rev.expected_years_managed);
 
   // Resolve segment-specific assumptions; effective ramps already on rev
   const ramp = { mgmt: rev.effective_mgmt_ramp, tenant: rev.effective_tenant_ramp };
@@ -1387,6 +1572,15 @@ function exportExcel() {
   setCell("A20", "Renewal Fee Type",  STYLE.inputLabel); setCell("B20", renewalTypeLabel, STYLE.inputValue);
   setCell("C20", renewalAmountLabel,  STYLE.inputLabel); setCell("D20", input.renewal_amount, STYLE.inputValueRight, { z: renewalAmountFmt });
 
+  // MF style + RBP toggles + cost (informational, not formulas)
+  const mfStyleLabel = (input.asset_type === "Multi-Family")
+    ? (input.mf_style === "Onsite" ? "MF Onsite (no leasing/renewal)" : "MF Standard (offsite)")
+    : "N/A (SFR)";
+  const rbpLabel = input.rbp_status === "opt_out" ? "Opt-out (zero RBP)" : "Opt-in";
+  setCell("A21", "MF Style",          STYLE.inputLabel); setCell("B21", mfStyleLabel,    STYLE.inputValue);
+  setCell("C21", "RBP Status",        STYLE.inputLabel); setCell("D21", rbpLabel,        STYLE.inputValue);
+  // Note: cost_per_door is reflected in the Cost row below
+
   // ===== ATLAS DATA ASSUMPTIONS (row 22 header, rows 23-25) =====
   setCell("A22", "REVENUE ASSUMPTIONS (from Atlas TTM data)", STYLE.sectionHeader);
   setCell("B22", "", STYLE.sectionHeader);
@@ -1406,7 +1600,7 @@ function exportExcel() {
 
   setCell("A23", "Effective Mgmt Ramp",   STYLE.assumptionLabel); setCell("B23", ramp.mgmt,      STYLE.assumptionValue, { z: NUM4 });
   setCell("C23", "Leasing Events / yr",   STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
-  setCell("A24", "Effective Tenant Ramp", STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
+  setCell("A24", "Effective Resident Ramp", STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
   setCell("C24", "Renewal Events / yr",   STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
   setCell("A25", "Vacancy Adjustment",    STYLE.assumptionLabel);
   setFormula("B25", "1-0.5/30.5", 1 - 0.5/30.5, STYLE.assumptionValue, { z: NUM4 });
@@ -1454,7 +1648,7 @@ function exportExcel() {
     'IF(B20="% of Monthly Rent",B16*D20/100,IF(B20="Flat Dollar Amount",D20,0))*D24*B24/12',
     rev.renewal, STYLE.tableRowValue);
 
-  // Rows 33-43: Tenant fee line items (ramp-adjusted to match web app display)
+  // Rows 33-43: Resident fee line items (ramp-adjusted to match web app display)
   const feeRows = [
     ["Late fees",                          rev.tenant_fees.late],
     ["NSF",                                rev.tenant_fees.nsf],
@@ -1488,7 +1682,7 @@ function exportExcel() {
   setCell("C46", "", STYLE.sectionHeader);
   setCell("D46", "", STYLE.sectionHeader);
 
-  setCell("A47", "Cost-to-Serve (flat assumption)", STYLE.tableRowLabel);
+  setCell("A47", "Cost to Manage per Door (input)", STYLE.tableRowLabel);
   setCell("B47", "", STYLE.tableRowLabel);
   setCell("C47", "", STYLE.tableRowLabel);
   setCell("D47", cost.total, STYLE.tableRowValue);
@@ -1518,9 +1712,9 @@ function exportExcel() {
   const notes = [
     "Yellow cells are editable inputs. The Revenue Breakdown and Cost & Contribution sections recalculate when you change them.",
     "Gray cells reflect the segment chosen at export. Editing State or Asset Type here will not re-pull data; re-run the web calculator and re-export to refresh.",
-    "Tenant fee line items show the Atlas-keep amounts after the tenure ramp is applied, matching the web calculator.",
+    "Resident fee line items show the Atlas-keep amounts after the tenure ramp is applied, matching the web calculator.",
     "Lifetime Contribution and Breakeven Management Fee are computed at export and shown as values, not formulas.",
-    "Cost-to-Serve is a flat $150 per door per month placeholder. Replace with finance allocation when available.",
+    "Cost to Manage per Door is a flat user input set on the web calculator. Segmented cost modeling is a separate workstream.",
   ];
   notes.forEach((n, i) => {
     const row = 54 + i;
@@ -1622,11 +1816,18 @@ function exportPDF() {
 
 // Auto-calc on input change
 ["addr_street","addr_city","asset_type","state","doors","rent","mgmt_fee","hold_period",
- "leasing_type","leasing_amount","renewal_type","renewal_amount"].forEach(id => {
+ "leasing_type","leasing_amount","renewal_type","renewal_amount",
+ "mf_style","rbp_status","onsite_labor","cost_per_door"].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener("change", () => { syncFeeLabels(); calculate(); });
   el.addEventListener("input", () => { syncFeeLabels(); calculate(); });
+});
+
+// Build the fee allocation matrix once, then hook each select to recalc
+populateFeeAllocation();
+document.querySelectorAll("#fee_alloc_tbody select[data-fee]").forEach(sel => {
+  sel.addEventListener("change", () => calculate());
 });
 
 // Initial render
