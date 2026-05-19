@@ -476,6 +476,12 @@
       <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
         Fully-loaded Atlas cost per door per month. Override per deal as needed. Segmented cost-to-serve modeling is a separate workstream.
       </div>
+
+      <label>Vacancy Override (%, blank = segment default)</label>
+      <input type="number" id="vacancy_override" value="" min="0" max="40" step="0.5" placeholder="e.g. 8.0" />
+      <div style="font-size:11px; color:#888; margin-top:-8px; margin-bottom:14px; line-height:1.4;">
+        Economic vacancy (1 − collected/potential rent). Defaults to the segment average. Override for stress tests or specific deals where you know the property's true occupancy.
+      </div>
     </div>
 
     <h3>Leasing &amp; Renewal Terms</h3>
@@ -752,13 +758,17 @@ const LEASING_EVENTS_DEFAULT = {
   "Single-Family": {leasing: 0.36, renewal: 0.50},
 };
 
+// TENURE_RAMP factors are Year N achieved revenue / Year 2 achieved revenue
+// (i.e. relative ramp). Year 2 is the "steady-state" normalizer = 1.0.
+// Year 1 values updated v2.5 from empirical Standard-cohort longitudinal data.
+// Vacancy is NOT embedded — it's handled separately via SEGMENT_VACANCY.
 const TENURE_RAMP = {
-  "Multi-Family|under_12_months": {mgmt:0.49, tenant:0.46},
-  "Multi-Family|12_to_24_months": {mgmt:0.65, tenant:0.86},
+  "Multi-Family|under_12_months": {mgmt:0.77, tenant:0.94},
+  "Multi-Family|12_to_24_months": {mgmt:1.00, tenant:1.00},
   "Multi-Family|24_to_60_months": {mgmt:0.97, tenant:1.00},
   "Multi-Family|60_plus_months":  {mgmt:1.00, tenant:0.92},
-  "Single-Family|under_12_months": {mgmt:0.74, tenant:0.43},
-  "Single-Family|12_to_24_months": {mgmt:0.94, tenant:1.00},
+  "Single-Family|under_12_months": {mgmt:0.79, tenant:0.93},
+  "Single-Family|12_to_24_months": {mgmt:1.00, tenant:1.00},
   "Single-Family|24_to_60_months": {mgmt:1.00, tenant:0.86},
   "Single-Family|60_plus_months":  {mgmt:0.87, tenant:0.70},
 };
@@ -769,6 +779,31 @@ const RETENTION_HAZARD = {
   "Single-Family|0": 0.15, "Single-Family|1": 0.10, "Single-Family|2": 0.10,
   "Single-Family|3": 0.07, "Single-Family|4": 0.06, "Single-Family|5": 0.04,
 };
+
+// Segment-specific economic vacancy: 1 - (collected rent / potential rent).
+// Replaces the static 0.5/30.5 SFR-style turn formula. Stabilized 3rd Party
+// residential population, TTM. MF runs materially higher than the old static
+// 1.64% because real MF includes concessions and delinquency, not just empty doors.
+const SEGMENT_VACANCY = {
+  // asset_type|state -> economic vacancy fraction (0-1)
+  "Multi-Family|AZ":  0.133,
+  "Multi-Family|CO":  0.136,
+  "Multi-Family|MO":  0.056,
+  "Multi-Family|UT":  0.110,
+  "Multi-Family":     0.130,  // portfolio-wide MF fallback
+  "Single-Family|AZ": 0.075,
+  "Single-Family|CO": 0.023,
+  "Single-Family|ID": 0.084,
+  "Single-Family|MO": 0.088,
+  "Single-Family|UT": 0.020,
+  "Single-Family":    0.040,  // portfolio-wide SFR fallback
+};
+function getSegmentVacancy(asset_type, state) {
+  const k = asset_type + "|" + state;
+  if (SEGMENT_VACANCY[k] !== undefined) return SEGMENT_VACANCY[k];
+  if (SEGMENT_VACANCY[asset_type] !== undefined) return SEGMENT_VACANCY[asset_type];
+  return 0.05; // last-resort fallback
+}
 
 // Portfolio benchmarks: P25, median, P75 of mgmt fee %, rent per door, and
 // Atlas-keep MRU per door. Stabilized 3rd Party residential population, Tukey-
@@ -1016,7 +1051,7 @@ function predictRevenue(input) {
          leasing_type, leasing_amount, renewal_type, renewal_amount,
          mf_style, rbp_status, fee_allocation,
          property_status, months_to_stabilize,
-         min_mgmt_fee, min_mgmt_duration} = input;
+         min_mgmt_fee, min_mgmt_duration, vacancy_override} = input;
 
   const isOnsite = (asset_type === "Multi-Family" && mf_style === "Onsite");
   const rbpOptIn = (rbp_status !== "opt_out");
@@ -1028,8 +1063,16 @@ function predictRevenue(input) {
   const effMgmt = hold.effective_mgmt_ramp;
   const effTenant = hold.effective_tenant_ramp;
 
-  // Net management fee per door per month (vacancy + effective mgmt ramp)
-  const vacancyFactor = 1 - (0.5 / 30.5);
+  // Net management fee per door per month.
+  // v2.5: vacancy is now segment-specific (economic vacancy from TTM data),
+  // replacing the static 0.5/30.5 SFR-style turn formula. The TENURE_RAMP
+  // values are normalized to Y2 achieved = 1.0, so applying segment vacancy
+  // captures the steady-state collected-vs-potential haircut once, and the
+  // ramp captures Year-over-Year onboarding/retention drag on top.
+  const segVac = (typeof vacancy_override === "number" && !isNaN(vacancy_override) && vacancy_override >= 0)
+    ? vacancy_override
+    : getSegmentVacancy(asset_type, state);
+  const vacancyFactor = 1 - segVac;
   let mgmtFee = rent * mgmt_fee * vacancyFactor * effMgmt;
 
   // Apply minimum mgmt fee floor over the duration period.
@@ -1183,6 +1226,12 @@ function readInputs() {
     rbp_status: document.getElementById("rbp_status") ? document.getElementById("rbp_status").value : "opt_in",
     onsite_labor: parseFloat((document.getElementById("onsite_labor") || {}).value) || 0,
     cost_per_door: parseFloat((document.getElementById("cost_per_door") || {}).value) || COST_DEFAULT,
+    vacancy_override: (function(){
+      const v = (document.getElementById("vacancy_override") || {}).value;
+      if (v === "" || v == null) return null;
+      const n = parseFloat(v);
+      return isNaN(n) ? null : n / 100;
+    })(),
     property_status: document.getElementById("property_status") ? document.getElementById("property_status").value : "standard",
     months_to_stabilize: parseInt((document.getElementById("months_to_stabilize") || {}).value) || 6,
     min_mgmt_fee: parseFloat((document.getElementById("min_mgmt_fee") || {}).value) || 0,
@@ -1496,6 +1545,7 @@ function loadScenarioById(id) {
   if (document.getElementById("rbp_status"))  document.getElementById("rbp_status").value = i.rbp_status || "opt_in";
   if (document.getElementById("onsite_labor")) document.getElementById("onsite_labor").value = i.onsite_labor || 0;
   if (document.getElementById("cost_per_door")) document.getElementById("cost_per_door").value = (i.cost_per_door !== undefined ? i.cost_per_door : 150);
+  if (document.getElementById("vacancy_override")) document.getElementById("vacancy_override").value = (i.vacancy_override != null ? (i.vacancy_override * 100) : "");
   if (document.getElementById("property_status")) document.getElementById("property_status").value = i.property_status || "standard";
   if (document.getElementById("months_to_stabilize")) document.getElementById("months_to_stabilize").value = i.months_to_stabilize || 6;
   if (document.getElementById("min_mgmt_fee")) document.getElementById("min_mgmt_fee").value = i.min_mgmt_fee || 0;
@@ -1919,8 +1969,13 @@ function exportExcel() {
   setCell("C23", "Leasing Events / yr",   STYLE.assumptionLabel); setCell("D23", events.leasing, STYLE.assumptionValue, { z: NUM4 });
   setCell("A24", "Effective Resident Ramp", STYLE.assumptionLabel); setCell("B24", ramp.tenant,    STYLE.assumptionValue, { z: NUM4 });
   setCell("C24", "Renewal Events / yr",   STYLE.assumptionLabel); setCell("D24", events.renewal, STYLE.assumptionValue, { z: NUM4 });
-  setCell("A25", "Vacancy Adjustment",    STYLE.assumptionLabel);
-  setFormula("B25", "1-0.5/30.5", 1 - 0.5/30.5, STYLE.assumptionValue, { z: NUM4 });
+  // Segment-specific economic vacancy (1 − collected/potential rent).
+  // Replaces the legacy static 0.5/30.5 formula. Respects UW vacancy override.
+  const __segVacExport = (typeof input.vacancy_override === "number" && input.vacancy_override >= 0)
+    ? input.vacancy_override
+    : getSegmentVacancy(input.asset_type, input.state);
+  setCell("A25", "Segment Vacancy",       STYLE.assumptionLabel);
+  setCell("B25", 1 - __segVacExport,      STYLE.assumptionValue, { z: NUM4 });
   setCell("C25", "Expected Yrs Managed",  STYLE.assumptionLabel);
   setCell("D25", rev.expected_years_managed, STYLE.assumptionValue, { z: NUM4 });
   setCell("A26", "Data Segment",          STYLE.assumptionLabel);
@@ -1944,7 +1999,7 @@ function exportExcel() {
   setCell("B30", "", STYLE.tableRowLabel);
   setCell("C30", "", STYLE.tableRowLabel);
   setFormula("D30", "B16*D16*B25*B23",
-    input.rent * input.mgmt_fee * (1 - 0.5/30.5) * ramp.mgmt,
+    input.rent * input.mgmt_fee * (1 - __segVacExport) * ramp.mgmt,
     STYLE.tableRowValue);
 
   // Row 31: Leasing fee (formula — inline IF picks % vs flat based on type cell)
@@ -2134,7 +2189,7 @@ function exportPDF() {
 // Auto-calc on input change
 ["addr_street","addr_city","asset_type","state","doors","rent","mgmt_fee","hold_period",
  "leasing_type","leasing_amount","renewal_type","renewal_amount",
- "mf_style","rbp_status","onsite_labor","cost_per_door",
+ "mf_style","rbp_status","onsite_labor","cost_per_door","vacancy_override",
  "property_status","months_to_stabilize","min_mgmt_fee","min_mgmt_duration"].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
